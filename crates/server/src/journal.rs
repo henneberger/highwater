@@ -4,6 +4,8 @@ use object_store::{
     aws::{AmazonS3Builder, S3ConditionalPut},
     path::Path as ObjectPath,
 };
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
 
 const JOURNAL_FORMAT: u32 = 1;
@@ -252,6 +254,12 @@ impl RemoteJournal {
 pub(crate) struct ConditionalJournal {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    #[cfg(test)]
+    fail_after_head_commit: Arc<AtomicBool>,
+    #[cfg(test)]
+    fail_before_checkpoint_pointer: Arc<AtomicBool>,
+    #[cfg(test)]
+    fail_after_checkpoint_pointer_commit: Arc<AtomicBool>,
 }
 
 impl ConditionalJournal {
@@ -270,6 +278,12 @@ impl ConditionalJournal {
         Ok(Self {
             store: Arc::new(store),
             prefix: prefix.trim_matches('/').to_owned(),
+            #[cfg(test)]
+            fail_after_head_commit: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_before_checkpoint_pointer: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_after_checkpoint_pointer_commit: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -278,7 +292,27 @@ impl ConditionalJournal {
         Self {
             store: Arc::new(object_store::memory::InMemory::new()),
             prefix: "test".to_owned(),
+            fail_after_head_commit: Arc::new(AtomicBool::new(false)),
+            fail_before_checkpoint_pointer: Arc::new(AtomicBool::new(false)),
+            fail_after_checkpoint_pointer_commit: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[cfg(test)]
+    fn inject_ambiguous_head_commit(&self) {
+        self.fail_after_head_commit.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn inject_checkpoint_pointer_failure(&self) {
+        self.fail_before_checkpoint_pointer
+            .store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn inject_ambiguous_checkpoint_commit(&self) {
+        self.fail_after_checkpoint_pointer_commit
+            .store(true, Ordering::SeqCst);
     }
 
     fn path(&self, suffix: &str) -> ObjectPath {
@@ -401,6 +435,13 @@ impl ConditionalJournal {
         let mode = current.as_ref().map_or(PutMode::Create, |(_, version)| {
             PutMode::Update(version.clone())
         });
+        #[cfg(test)]
+        if self
+            .fail_before_checkpoint_pointer
+            .swap(false, Ordering::SeqCst)
+        {
+            bail!("injected checkpoint pointer failure");
+        }
         let result = self
             .store
             .put_opts(
@@ -409,6 +450,19 @@ impl ConditionalJournal {
                 PutOptions::from(mode),
             )
             .await;
+        #[cfg(test)]
+        let result = if result.is_ok()
+            && self
+                .fail_after_checkpoint_pointer_commit
+                .swap(false, Ordering::SeqCst)
+        {
+            Err(ObjectStoreError::Generic {
+                store: "injected",
+                source: anyhow!("ambiguous checkpoint commit response").into(),
+            })
+        } else {
+            result
+        };
         if let Err(error) = result {
             let observed = self.read_remote_checkpoint().await?;
             if observed
@@ -503,6 +557,16 @@ impl ConditionalJournal {
                 PutOptions::from(mode),
             )
             .await;
+        #[cfg(test)]
+        let committed =
+            if committed.is_ok() && self.fail_after_head_commit.swap(false, Ordering::SeqCst) {
+                Err(ObjectStoreError::Generic {
+                    store: "injected",
+                    source: anyhow!("ambiguous head commit response").into(),
+                })
+            } else {
+                committed
+            };
         let result = match committed {
             Ok(result) => result,
             Err(error) => {
@@ -580,6 +644,18 @@ impl ConditionalJournal {
 mod tests {
     use super::*;
 
+    fn checkpoint_manifest(id: &str, position: u64) -> CheckpointManifest {
+        CheckpointManifest {
+            format: 1,
+            checkpoint_id: id.to_owned(),
+            sequence: position,
+            shard_sequences: BTreeMap::from([(0, position)]),
+            created_at: 1.0,
+            object_path: String::new(),
+            state_handles: BTreeMap::new(),
+        }
+    }
+
     #[tokio::test]
     async fn conditional_head_fences_a_stale_owner() -> Result<()> {
         let journal = ConditionalJournal::memory();
@@ -595,6 +671,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiguous_head_response_is_resolved_by_readback() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        journal.inject_ambiguous_head_commit();
+
+        let committed = journal.append(1, None, 1, b"committed".to_vec()).await?;
+        let (head, records) = journal.recover(1, 0).await?;
+
+        assert_eq!(head.expect("head").head, committed.head);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].payload, b"committed");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn conditional_head_allows_only_one_competing_owner() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let first = journal.append(2, None, 1, b"first".to_vec()).await?;
+
+        let left_journal = journal.clone();
+        let left_cursor = first.clone();
+        let right_journal = journal.clone();
+        let right_cursor = first.clone();
+        let (left, right) = tokio::join!(
+            left_journal.append(2, Some(&left_cursor), 2, b"left".to_vec()),
+            right_journal.append(2, Some(&right_cursor), 2, b"right".to_vec())
+        );
+
+        assert_ne!(left.is_ok(), right.is_ok());
+        let (_, records) = journal.recover(2, 0).await?;
+        assert_eq!(records.len(), 2);
+        assert!(records[1].payload == b"left" || records[1].payload == b"right");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn owner_epoch_cannot_skip_fencing_generation() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let first = journal.append(4, None, 1, b"first".to_vec()).await?;
+
+        let skipped = journal
+            .append(4, Some(&first), 3, b"skipped".to_vec())
+            .await;
+
+        assert!(skipped.is_err());
+        let (head, records) = journal.recover(4, 0).await?;
+        assert_eq!(head.expect("head").head, first.head);
+        assert_eq!(records.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_fails_closed_when_committed_record_is_missing() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let committed = journal.append(5, None, 1, b"committed".to_vec()).await?;
+        journal
+            .store
+            .delete(&ObjectPath::from(committed.head.record_path.as_str()))
+            .await?;
+
+        assert!(journal.recover(5, 0).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_fails_closed_when_committed_record_is_corrupt() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let committed = journal.append(6, None, 1, b"committed".to_vec()).await?;
+        journal
+            .store
+            .put(
+                &ObjectPath::from(committed.head.record_path.as_str()),
+                b"not-messagepack".to_vec().into(),
+            )
+            .await?;
+
+        assert!(journal.recover(6, 0).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn checkpoint_publication_is_monotonic_and_restorable() -> Result<()> {
         let journal = ConditionalJournal::memory();
         let root = std::env::temp_dir().join(format!("highwater-journal-{}", Uuid::new_v4()));
@@ -602,15 +758,7 @@ mod tests {
         let restored = root.join("restored");
         fs::create_dir_all(&source)?;
         fs::write(source.join("CURRENT"), b"MANIFEST-000001\n")?;
-        let manifest = CheckpointManifest {
-            format: 1,
-            checkpoint_id: "checkpoint-2".to_owned(),
-            sequence: 2,
-            shard_sequences: BTreeMap::from([(0, 2)]),
-            created_at: 1.0,
-            object_path: String::new(),
-            state_handles: BTreeMap::new(),
-        };
+        let manifest = checkpoint_manifest("checkpoint-2", 2);
         journal.publish_checkpoint(&manifest, &source).await?;
         assert!(journal.restore_latest_checkpoint(&restored).await?);
         assert_eq!(fs::read(restored.join("CURRENT"))?, b"MANIFEST-000001\n");
@@ -619,6 +767,54 @@ mod tests {
         older.checkpoint_id = "checkpoint-1".to_owned();
         older.shard_sequences.insert(0, 1);
         assert!(journal.publish_checkpoint(&older, &source).await.is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn interrupted_checkpoint_publication_preserves_previous_pointer() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let root = std::env::temp_dir().join(format!("highwater-journal-{}", Uuid::new_v4()));
+        let source = root.join("source");
+        let restored = root.join("restored");
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("CURRENT"), b"old-checkpoint\n")?;
+        journal
+            .publish_checkpoint(&checkpoint_manifest("checkpoint-1", 1), &source)
+            .await?;
+
+        fs::write(source.join("CURRENT"), b"unpublished-checkpoint\n")?;
+        journal.inject_checkpoint_pointer_failure();
+        let interrupted = journal
+            .publish_checkpoint(&checkpoint_manifest("checkpoint-2", 2), &source)
+            .await;
+
+        assert!(interrupted.is_err());
+        assert!(journal.restore_latest_checkpoint(&restored).await?);
+        assert_eq!(fs::read(restored.join("CURRENT"))?, b"old-checkpoint\n");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ambiguous_checkpoint_response_is_resolved_by_readback() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let root = std::env::temp_dir().join(format!("highwater-journal-{}", Uuid::new_v4()));
+        let source = root.join("source");
+        let restored = root.join("restored");
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("CURRENT"), b"committed-checkpoint\n")?;
+        journal.inject_ambiguous_checkpoint_commit();
+
+        journal
+            .publish_checkpoint(&checkpoint_manifest("checkpoint-1", 1), &source)
+            .await?;
+
+        assert!(journal.restore_latest_checkpoint(&restored).await?);
+        assert_eq!(
+            fs::read(restored.join("CURRENT"))?,
+            b"committed-checkpoint\n"
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }

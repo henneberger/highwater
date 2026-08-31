@@ -28,6 +28,18 @@ pub(crate) fn operator_frontier(
     transaction: &Transaction<'_>,
     operator_id: &str,
 ) -> Result<Option<f64>> {
+    if let Some(process) = transaction.get::<DurableProcess>(&process_key(operator_id))?
+        && process_has_pending_work(
+            process.pending,
+            process.running,
+            transaction
+                .scan::<ProcessShardState>(&format!("process-shard/{}/", encoded(operator_id)))?
+                .into_iter()
+                .map(|(_, shard)| shard),
+        )
+    {
+        return Ok(None);
+    }
     let mut frontier = Some(f64::MAX);
     for stream in operator_input_streams(transaction, operator_id)? {
         let config = transaction
@@ -42,6 +54,18 @@ pub(crate) fn operator_frontier(
         };
     }
     Ok(frontier)
+}
+
+fn process_has_pending_work(
+    pending: u64,
+    running: u64,
+    shards: impl IntoIterator<Item = ProcessShardState>,
+) -> bool {
+    pending > 0
+        || running > 0
+        || shards
+            .into_iter()
+            .any(|shard| shard.pending > 0 || shard.running > 0)
 }
 
 pub(crate) fn stream_reaches_any(
@@ -475,4 +499,34 @@ pub(crate) fn refresh_stream(
         fire_due_stream_schedules(transaction, config, state)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_frontier_waits_for_async_work_to_finish() {
+        assert!(process_has_pending_work(
+            0,
+            0,
+            [ProcessShardState {
+                pending: 1,
+                ..ProcessShardState::default()
+            }]
+        ));
+        assert!(process_has_pending_work(
+            0,
+            1,
+            std::iter::empty::<ProcessShardState>()
+        ));
+        assert!(!process_has_pending_work(
+            0,
+            0,
+            [ProcessShardState {
+                completed: 3,
+                ..ProcessShardState::default()
+            }]
+        ));
+    }
 }

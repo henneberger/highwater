@@ -6,6 +6,13 @@ from examples.clickstream_recommendation import (
 from examples.deduplicate import DeduplicateWorkflow
 from examples.batched_embeddings import BatchedEmbeddings
 from examples.durable_process import AccountBalanceProcess
+from examples.durable_order_pipeline import (
+    FulfillReadyOrder,
+    OrderIntake,
+    capture_payment,
+    create_shipping_label,
+    reserve_order_inventory,
+)
 from examples.event_time_windows import EventTimeGateWorkflow, WindowSumWorkflow
 from examples.order import OrderWorkflow, charge
 from examples.reliable_activities import (
@@ -22,6 +29,8 @@ __all__ = [
     "FulfillmentWorkflow",
     "BatchedEmbeddings",
     "AccountBalanceProcess",
+    "OrderIntake",
+    "FulfillReadyOrder",
     "DeduplicateWorkflow",
     "OrderWorkflow",
     "PageWorkflow",
@@ -38,4 +47,7 @@ __all__ = [
     "create_shipment",
     "release_inventory",
     "reserve_inventory",
+    "reserve_order_inventory",
+    "capture_payment",
+    "create_shipping_label",
 ]

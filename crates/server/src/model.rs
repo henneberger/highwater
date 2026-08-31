@@ -468,6 +468,10 @@ pub(crate) struct ProcessReadyExecution {
 pub(crate) struct ProcessBatchLease {
     pub(crate) process_id: String,
     pub(crate) shard: u32,
+    #[serde(default)]
+    pub(crate) owner_epoch: u64,
+    #[serde(default)]
+    pub(crate) activation_sequence: u64,
     pub(crate) worker_id: String,
     pub(crate) lease_expires: f64,
     pub(crate) executions: Vec<ProcessReadyExecution>,
@@ -485,11 +489,37 @@ pub(crate) struct ProcessShardState {
     pub(crate) active_keys: HashSet<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProcessPartitionOwner {
+    pub(crate) partition_id: u32,
+    pub(crate) owner: String,
+    pub(crate) epoch: u64,
+    pub(crate) lease_expires: f64,
+    #[serde(default)]
+    pub(crate) next_activation_sequence: u64,
+}
+
 pub(crate) struct ProcessIngressRequest {
     pub(crate) process_id: String,
     pub(crate) records: Vec<(usize, AppendStreamRecordRequest)>,
     pub(crate) detailed: bool,
     pub(crate) response: oneshot::Sender<std::result::Result<ProcessIngressResult, String>>,
+}
+
+pub(crate) enum ProcessPartitionCommand {
+    Ingress(ProcessIngressRequest),
+    Poll {
+        request: PollRequest,
+        response: oneshot::Sender<std::result::Result<Option<ProcessActivationBatch>, String>>,
+    },
+    Complete {
+        completion: ProcessCompletionBatch,
+        response: oneshot::Sender<std::result::Result<(), String>>,
+    },
+    Renew {
+        renewal: ProcessLeaseRenewal,
+        response: oneshot::Sender<std::result::Result<f64, String>>,
+    },
 }
 
 #[derive(Default)]

@@ -171,6 +171,9 @@ pub(crate) fn process_batch_lease_key(token: &str) -> String {
 pub(crate) fn process_batch_lease_prefix() -> &'static str {
     "process-batch-lease/"
 }
+pub(crate) fn process_partition_owner_key(shard: usize) -> String {
+    format!("process-partition-owner/{shard:04}")
+}
 pub(crate) fn process_ready_prefix(shard: usize) -> String {
     format!("process-ready/{shard:04}/")
 }
@@ -528,6 +531,98 @@ pub(crate) fn renew_key_groups(app: &AppState) -> Result<()> {
     })
 }
 
+pub(crate) fn initialize_process_partitions(app: &AppState) -> Result<()> {
+    for shard in 1..app.shard_locks.len() {
+        app.commit_shard(shard, |transaction| {
+            let key = process_partition_owner_key(shard);
+            let current = transaction.get::<ProcessPartitionOwner>(&key)?;
+            let epoch = current
+                .as_ref()
+                .map_or(1, |owner| owner.epoch.saturating_add(1));
+            let next_activation_sequence =
+                current.map_or(0, |owner| owner.next_activation_sequence);
+            transaction.put(
+                key,
+                &ProcessPartitionOwner {
+                    partition_id: u32::try_from(shard)?,
+                    owner: app.runtime_id.clone(),
+                    epoch,
+                    lease_expires: now() + app.lease_seconds,
+                    next_activation_sequence,
+                },
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn next_process_partition_activation(
+    transaction: &mut Transaction<'_>,
+    runtime_id: &str,
+    shard: usize,
+) -> Result<(u64, u64)> {
+    let key = process_partition_owner_key(shard);
+    let mut owner = transaction
+        .get::<ProcessPartitionOwner>(&key)?
+        .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+    if owner.owner != runtime_id || owner.lease_expires <= now() {
+        bail!(
+            "process partition {shard} is fenced at epoch {} and owned by {}",
+            owner.epoch,
+            owner.owner,
+        );
+    }
+    owner.next_activation_sequence = owner
+        .next_activation_sequence
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("process partition {shard} activation sequence exhausted"))?;
+    let activation = (owner.epoch, owner.next_activation_sequence);
+    transaction.put(key, &owner)?;
+    Ok(activation)
+}
+
+pub(crate) fn renew_process_partitions(app: &AppState) -> Result<()> {
+    for shard in 1..app.shard_locks.len() {
+        app.commit_shard(shard, |transaction| {
+            let key = process_partition_owner_key(shard);
+            let mut owner = transaction
+                .get::<ProcessPartitionOwner>(&key)?
+                .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+            if owner.owner != app.runtime_id {
+                bail!(
+                    "process partition {shard} is fenced at epoch {} and owned by {}",
+                    owner.epoch,
+                    owner.owner,
+                );
+            }
+            if owner.lease_expires <= now() + app.lease_seconds / 2.0 {
+                owner.lease_expires = now() + app.lease_seconds;
+                transaction.put(key, &owner)?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn owned_process_partition_epoch(
+    transaction: &Transaction<'_>,
+    runtime_id: &str,
+    shard: usize,
+) -> Result<u64> {
+    let owner = transaction
+        .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
+        .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+    if owner.owner != runtime_id || owner.lease_expires <= now() {
+        bail!(
+            "process partition {shard} is fenced at epoch {} and owned by {}",
+            owner.epoch,
+            owner.owner,
+        );
+    }
+    Ok(owner.epoch)
+}
+
 pub(crate) fn ordered_f64_bits(value: f64) -> u64 {
     let bits = value.to_bits();
     if bits & (1 << 63) == 0 {
@@ -584,4 +679,64 @@ pub(crate) fn enqueue_workflow(
             enqueued_at,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_partition_epoch_fences_the_previous_runtime() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "highwater-process-partition-test-{}",
+            Uuid::new_v4()
+        ));
+        let state_dir = root.join("state");
+        let object_dir = root.join("objects");
+        let mut app = AppState {
+            store: Arc::new(DurableStore::open_sharded(&state_dir, &object_dir, 2)?),
+            mutation_lock: Arc::new(Mutex::new(())),
+            shard_locks: Arc::new(vec![Mutex::new(()), Mutex::new(())]),
+            partition_senders: Arc::new(vec![None, None]),
+            node_id: "test".to_owned(),
+            runtime_id: "test:first".to_owned(),
+            key_group_count: 1,
+            lease_seconds: 30.0,
+            query_queue: Arc::new(Mutex::new(VecDeque::new())),
+            query_results: Arc::new(Mutex::new(HashMap::new())),
+        };
+        initialize_process_partitions(&app)?;
+        let mut first = None;
+        app.commit_shard(1, |transaction| {
+            first = Some(next_process_partition_activation(
+                transaction,
+                &app.runtime_id,
+                1,
+            )?);
+            Ok(())
+        })?;
+
+        let old_runtime = app.runtime_id.clone();
+        app.runtime_id = "test:second".to_owned();
+        initialize_process_partitions(&app)?;
+        let mut second = None;
+        app.commit_shard(1, |transaction| {
+            assert!(owned_process_partition_epoch(transaction, &old_runtime, 1).is_err());
+            second = Some(next_process_partition_activation(
+                transaction,
+                &app.runtime_id,
+                1,
+            )?);
+            Ok(())
+        })?;
+
+        let (first_epoch, first_activation) = first.expect("first activation");
+        let (second_epoch, second_activation) = second.expect("second activation");
+        assert!(second_epoch > first_epoch);
+        assert!(second_activation > first_activation);
+
+        drop(app);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }

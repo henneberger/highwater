@@ -35,8 +35,8 @@ use std::{
 };
 use temporal_code_protocol::{
     ActivityCompletion, ActivityTask, Command, Event, PROTOCOL_VERSION, PollRequest,
-    ProcessActivationBatch, ProcessCompletionBatch, QueryCompletion, QueryTask, WorkflowActivation,
-    WorkflowCompletion,
+    ProcessActivationBatch, ProcessCompletionBatch, ProcessLeaseRenewal, QueryCompletion,
+    QueryTask, WorkflowActivation, WorkflowCompletion,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};

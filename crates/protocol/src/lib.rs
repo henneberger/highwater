@@ -91,6 +91,10 @@ pub struct ProcessCompletion {
 pub struct ProcessActivationBatch {
     pub protocol_version: u32,
     pub lease_token: String,
+    pub partition_id: u32,
+    pub owner_epoch: u64,
+    pub activation_sequence: u64,
+    pub lease_expires: f64,
     pub process_id: String,
     pub workflow_type: String,
     pub build_id: String,
@@ -110,7 +114,20 @@ pub struct ProcessBatchResult {
 pub struct ProcessCompletionBatch {
     pub protocol_version: u32,
     pub lease_token: String,
+    pub partition_id: u32,
+    pub owner_epoch: u64,
+    pub activation_sequence: u64,
     pub items: Vec<ProcessBatchResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessLeaseRenewal {
+    pub protocol_version: u32,
+    pub lease_token: String,
+    pub partition_id: u32,
+    pub owner_epoch: u64,
+    pub activation_sequence: u64,
+    pub extend_seconds: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +189,8 @@ pub struct PollRequest {
     pub lease_seconds: f64,
     #[serde(default)]
     pub shard_cursor: u64,
+    #[serde(default)]
+    pub partition_id: Option<u32>,
 }
 
 fn default_lease_seconds() -> f64 {

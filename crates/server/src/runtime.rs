@@ -56,13 +56,14 @@ pub async fn run() -> Result<()> {
             "node-id must be non-empty; key-groups and lease-seconds must be positive; log-shards must be 2..256"
         );
     }
-    let mut ingress_senders = vec![None];
-    let mut ingress_receivers = Vec::new();
+    let mut partition_senders = vec![None];
+    let mut partition_receivers = Vec::new();
     for shard in 1..log_shards {
-        let (sender, receiver) = mpsc::channel(4_096);
-        ingress_senders.push(Some(sender));
-        ingress_receivers.push((shard, receiver));
+        let (sender, receiver) = mpsc::channel::<ProcessPartitionCommand>(4_096);
+        partition_senders.push(Some(sender));
+        partition_receivers.push((shard, receiver));
     }
+    let runtime_id = format!("{node_id}:{}", Uuid::new_v4());
     let state = AppState {
         store: Arc::new(DurableStore::open_sharded(
             &state_dir,
@@ -71,17 +72,19 @@ pub async fn run() -> Result<()> {
         )?),
         mutation_lock: Arc::new(Mutex::new(())),
         shard_locks: Arc::new((0..log_shards).map(|_| Mutex::new(())).collect()),
-        ingress_senders: Arc::new(ingress_senders),
+        partition_senders: Arc::new(partition_senders),
         node_id,
+        runtime_id,
         key_group_count,
         lease_seconds,
         query_queue: Arc::new(Mutex::new(VecDeque::new())),
         query_results: Arc::new(Mutex::new(HashMap::new())),
     };
     initialize_key_groups(&state)?;
+    initialize_process_partitions(&state)?;
     recover_process_tasks(&state, true)?;
-    for (shard, receiver) in ingress_receivers {
-        tokio::spawn(process_ingress_loop(state.clone(), shard, receiver));
+    for (shard, receiver) in partition_receivers {
+        tokio::spawn(process_partition_loop(state.clone(), shard, receiver));
     }
     tokio::spawn(event_time_maintenance_loop(state.clone()));
     let app = Router::new()
@@ -113,6 +116,10 @@ pub async fn run() -> Result<()> {
         .route(
             "/internal/v1/process-tasks/complete-batch",
             post(complete_process_batch),
+        )
+        .route(
+            "/internal/v1/process-tasks/renew",
+            post(renew_process_lease),
         )
         .route("/internal/v1/activity-tasks/poll", post(poll_activity))
         .route(

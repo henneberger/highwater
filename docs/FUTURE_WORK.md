@@ -4,11 +4,11 @@ Durability and distribution now take precedence over adding operators. Keep this
 
 1. Replace the filesystem WAL adapter with object-store conditional writes, a CAS manifest, leader epochs, and fencing.
 2. Upload only changed RocksDB checkpoint files; full checkpoints already bound WAL replay.
-3. Move fenced key-group leases from the control process into remote shard executors.
+3. Move the local partition command loops into remotely placeable shard owners while preserving their durable epochs.
 4. Move invocation transport from HTTP/JSON to the versioned Protobuf protocol with long polling or streaming RPC.
 5. Complete Process build pinning and migration compatibility across rolling deployments.
-6. Add runtime-controlled Process invocation renewal. Bind every grant, renewal, and completion to the durable shard-owner epoch so reassignment fences all delayed work; lease expiry alone must only make a grant eligible for transactional revocation.
-7. Add sticky Process caches and batched durable commits.
+6. Add durable activation revocation and a configurable maximum total invocation duration; runtime-controlled renewal and owner-epoch fencing are implemented.
+7. Add automatic partition assignment, sticky Process caches, and batched durable commits.
 8. Materialize large Arrow IPC payloads in object storage and keep references in history.
 9. Expand failover, nondeterminism, observability, and history-inspection coverage.
 

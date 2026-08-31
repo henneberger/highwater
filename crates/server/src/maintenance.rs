@@ -21,14 +21,20 @@ pub(crate) fn maintain_event_time(app: &AppState) -> Result<()> {
     })
 }
 
-pub(crate) fn recover_process_tasks(app: &AppState, _recover_orphans: bool) -> Result<()> {
+pub(crate) fn recover_process_tasks(app: &AppState, recover_orphans: bool) -> Result<()> {
     let timestamp = now();
     let mut expired_by_shard = BTreeMap::<usize, Vec<(String, ProcessBatchLease)>>::new();
     for (lease_key, lease) in app
         .store
         .scan::<ProcessBatchLease>(process_batch_lease_prefix())?
     {
-        if lease.lease_expires <= timestamp {
+        let owner_epoch = app
+            .store
+            .get::<ProcessPartitionOwner>(&process_partition_owner_key(lease.shard as usize))?
+            .map(|owner| owner.epoch);
+        if lease.lease_expires <= timestamp
+            || recover_orphans && owner_epoch != Some(lease.owner_epoch)
+        {
             expired_by_shard
                 .entry(lease.shard as usize)
                 .or_default()
@@ -41,7 +47,11 @@ pub(crate) fn recover_process_tasks(app: &AppState, _recover_orphans: bool) -> R
                 let Some(lease) = transaction.get::<ProcessBatchLease>(&lease_key)? else {
                     continue;
                 };
-                if lease.lease_expires > now() {
+                let owner = transaction
+                    .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
+                    .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+                let orphaned = owner.owner != app.runtime_id || owner.epoch != lease.owner_epoch;
+                if lease.lease_expires > now() && !(recover_orphans && orphaned) {
                     continue;
                 }
                 for ready_execution in lease.executions {
@@ -70,6 +80,9 @@ pub(crate) async fn event_time_maintenance_loop(app: AppState) {
         }
         if let Err(error) = renew_key_groups(&app) {
             eprintln!("key-group lease renewal failed: {error:#}");
+        }
+        if let Err(error) = renew_process_partitions(&app) {
+            eprintln!("process partition renewal failed: {error:#}");
         }
         let has_remote_owner = app
             .store

@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import time
 import traceback
 import uuid
 from typing import Any
@@ -48,6 +49,8 @@ class RustWorker:
         lease_seconds: float = 30.0,
         process_poll_width: int | None = None,
         process_shard_offset: int = 0,
+        process_partitions: tuple[int, ...] | None = None,
+        process_only: bool = False,
     ) -> None:
         self.registry = registry
         self.runner = WorkflowRunner(registry)
@@ -60,7 +63,15 @@ class RustWorker:
             raise ValueError("process_poll_width must be positive")
         if process_shard_offset < 0:
             raise ValueError("process_shard_offset must be non-negative")
+        if process_partitions is not None and (
+            not process_partitions
+            or any(partition <= 0 for partition in process_partitions)
+            or len(set(process_partitions)) != len(process_partitions)
+        ):
+            raise ValueError("process_partitions must contain unique positive integers")
         self._process_shard_cursor = process_shard_offset
+        self._process_partitions = process_partitions
+        self._process_only = process_only
         default_process_poll_width = (
             8
             if any(
@@ -184,11 +195,17 @@ class RustWorker:
 
     async def _process_once(self) -> bool:
         bodies = []
-        for _ in range(self._process_poll_width):
-            body = self._poll_body()
-            body["shard_cursor"] = self._process_shard_cursor
-            self._process_shard_cursor += 1
-            bodies.append(body)
+        if self._process_partitions is not None:
+            for partition_id in self._process_partitions:
+                body = self._poll_body()
+                body["partition_id"] = partition_id
+                bodies.append(body)
+        else:
+            for _ in range(self._process_poll_width):
+                body = self._poll_body()
+                body["shard_cursor"] = self._process_shard_cursor
+                self._process_shard_cursor += 1
+                bodies.append(body)
         polled = await asyncio.gather(*(
             asyncio.to_thread(
                 self._request, "/internal/v1/process-tasks/poll-batch", body,
@@ -198,6 +215,11 @@ class RustWorker:
         batches = [batch for batch in polled if batch is not None]
         if not batches:
             return False
+        renewal_stops = [asyncio.Event() for _ in batches]
+        renewal_tasks = [
+            asyncio.create_task(self._renew_process_batch(batch, stop))
+            for batch, stop in zip(batches, renewal_stops, strict=True)
+        ]
         completions = []
         for batch in batches:
             definition = self.registry.workflows[batch["workflow_type"]]
@@ -225,6 +247,9 @@ class RustWorker:
             completions.append({
                 "protocol_version": 1,
                 "lease_token": batch["lease_token"],
+                "partition_id": batch["partition_id"],
+                "owner_epoch": batch["owner_epoch"],
+                "activation_sequence": batch["activation_sequence"],
                 "items": items,
             })
 
@@ -237,8 +262,47 @@ class RustWorker:
                 if "task lease lost" not in str(error):
                     raise
 
-        await asyncio.gather(*(complete(body) for body in completions))
+        try:
+            await asyncio.gather(*(complete(body) for body in completions))
+        finally:
+            for stop in renewal_stops:
+                stop.set()
+            await asyncio.gather(*renewal_tasks, return_exceptions=True)
         return True
+
+    async def _renew_process_batch(
+        self,
+        batch: dict[str, Any],
+        stop: asyncio.Event,
+    ) -> None:
+        lease_expires = float(batch["lease_expires"])
+        while not stop.is_set():
+            delay = max(0.25, min(self.lease_seconds / 2, (lease_expires - time.time()) / 2))
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=delay)
+                return
+            except TimeoutError:
+                pass
+            try:
+                response = await asyncio.to_thread(
+                    self._request,
+                    "/internal/v1/process-tasks/renew",
+                    {
+                        "protocol_version": 1,
+                        "lease_token": batch["lease_token"],
+                        "partition_id": batch["partition_id"],
+                        "owner_epoch": batch["owner_epoch"],
+                        "activation_sequence": batch["activation_sequence"],
+                        "extend_seconds": self.lease_seconds,
+                    },
+                )
+                lease_expires = float(response["lease_expires"])
+            except RuntimeError as error:
+                if "task lease lost" in str(error):
+                    return
+                await asyncio.sleep(0.25)
+            except OSError:
+                await asyncio.sleep(0.25)
 
     async def _query_once(self) -> bool:
         task = await asyncio.to_thread(
@@ -315,6 +379,10 @@ class RustWorker:
 
     async def run_forever(self) -> None:
         while True:
+            if self._process_only:
+                if not await self._process_once():
+                    await asyncio.sleep(self.poll_interval)
+                continue
             process_work, workflow_work, activity_work, query_work = await asyncio.gather(
                 self._process_once(), self._workflow_once(), self._activity_once(), self._query_once(),
             )
@@ -329,6 +397,15 @@ def main() -> None:
     parser.add_argument("--task-queue")
     parser.add_argument("--process-poll-width", type=int)
     parser.add_argument("--process-shard-offset", type=int, default=0)
+    parser.add_argument(
+        "--process-partitions",
+        help="comma-separated process partition ids assigned to this execution instance",
+    )
+    parser.add_argument(
+        "--process-only",
+        action="store_true",
+        help="run only keyed Process execution",
+    )
     arguments = parser.parse_args()
     registry = Registry().discover(importlib.import_module(arguments.module))
     worker = RustWorker(
@@ -337,6 +414,12 @@ def main() -> None:
         task_queue=arguments.task_queue,
         process_poll_width=arguments.process_poll_width,
         process_shard_offset=arguments.process_shard_offset,
+        process_partitions=(
+            tuple(int(value) for value in arguments.process_partitions.split(","))
+            if arguments.process_partitions
+            else None
+        ),
+        process_only=arguments.process_only,
     )
     try:
         asyncio.run(worker.run_forever())

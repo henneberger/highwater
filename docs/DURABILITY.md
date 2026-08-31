@@ -4,7 +4,7 @@ The durable source of truth is the immutable object WAL, not local RocksDB and n
 
 WAL records have an explicit format version and named outer fields. Format 2 stores puts, deletes, and range deletes in compact columns; recovery still reads format 1 records. An unknown format fails startup instead of guessing. This keeps the high-throughput representation evolvable without making durable state dependent on Rust struct field order.
 
-Process completion uses the same boundary. An executor leases several Process activations and returns several results, and the owning lane commits their state, input progress, output changelog, outbox entries, and task acknowledgements in one WAL record. If the commit fails, none of those completions are acknowledged.
+Process completion uses the same boundary. An executor leases several Process activations and returns several results, and the owning lane commits their state, input progress, output changelog, outbox entries, and task acknowledgements in one WAL record. If the commit fails, none of those completions are acknowledged. Each grant includes the partition owner epoch and a partition-wide activation sequence. Renewal and completion verify both against the current durable owner inside the lane transaction, so a delayed executor cannot commit after restart or reassignment.
 
 Every per-key process state records:
 
@@ -20,7 +20,8 @@ A checkpoint is a consistent RocksDB snapshot at a vector of WAL positions, one 
 | --- | --- |
 | Before an input WAL batch is synced | The producer was not acknowledged and retries the batch. Stable event IDs deduplicate an uncertain response. |
 | After input acknowledgement, before execution | The admitted mailbox and source cursor replay from the WAL. |
-| During a Python batch | No completion was committed; durable leases expire, the ready index is reconstructed, and the inputs run again. |
+| During a Python batch | No completion was committed; the runtime renews live work, while expiry makes abandoned work eligible for transactional revocation and retry. |
+| Service restarts with active batches | Startup installs a higher durable owner epoch and immediately requeues old-epoch activations. Delayed renewal and completion requests fail closed. |
 | During a completion commit | The whole WAL record is present or absent. Partial state/output transitions are never applied. |
 | After a checkpoint but before manifest publication | Recovery uses the prior published checkpoint and replays more WAL. |
 | Loss of local RocksDB | Restore the object checkpoint and replay its WAL tail. |

@@ -847,59 +847,123 @@ pub(crate) fn commit_process_ingress_batch(
     Ok(results)
 }
 
-pub(crate) async fn process_ingress_loop(
+pub(crate) async fn process_partition_loop(
     app: AppState,
     shard: usize,
-    mut receiver: mpsc::Receiver<ProcessIngressRequest>,
+    mut receiver: mpsc::Receiver<ProcessPartitionCommand>,
 ) {
-    while let Some(first) = receiver.recv().await {
-        let mut requests = vec![first];
-        let mut records = requests[0].records.len();
-        let deadline = tokio::time::sleep(std::time::Duration::from_micros(500));
-        tokio::pin!(deadline);
-        while records < 10_000 {
-            tokio::select! {
-                biased;
-                request = receiver.recv() => {
-                    let Some(request) = request else { break };
-                    records += request.records.len();
-                    requests.push(request);
-                }
-                () = &mut deadline => break,
+    let mut pending = VecDeque::new();
+    loop {
+        let command = match pending.pop_front() {
+            Some(command) => command,
+            None => {
+                let Some(command) = receiver.recv().await else {
+                    break;
+                };
+                command
             }
-        }
-        let inputs = requests
-            .iter()
-            .map(|request| {
-                (
-                    request.process_id.clone(),
-                    request.records.clone(),
-                    request.detailed,
-                )
-            })
-            .collect::<Vec<_>>();
-        let task_app = app.clone();
-        let committed = tokio::task::spawn_blocking(move || {
-            commit_process_ingress_batch(&task_app, shard, &inputs)
-        })
-        .await;
-        match committed {
-            Ok(Ok(results)) => {
-                for (request, result) in requests.into_iter().zip(results) {
-                    let _ = request.response.send(Ok(result));
+        };
+        match command {
+            ProcessPartitionCommand::Ingress(first) => {
+                let mut requests = vec![first];
+                let mut records = requests[0].records.len();
+                let deadline = tokio::time::sleep(std::time::Duration::from_micros(500));
+                tokio::pin!(deadline);
+                while records < 10_000 {
+                    tokio::select! {
+                        biased;
+                        command = receiver.recv() => {
+                            let Some(command) = command else { break };
+                            match command {
+                                ProcessPartitionCommand::Ingress(request) => {
+                                    records += request.records.len();
+                                    requests.push(request);
+                                }
+                                command => {
+                                    pending.push_back(command);
+                                    break;
+                                }
+                            }
+                        }
+                        () = &mut deadline => break,
+                    }
+                }
+                let inputs = requests
+                    .iter()
+                    .map(|request| {
+                        (
+                            request.process_id.clone(),
+                            request.records.clone(),
+                            request.detailed,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let task_app = app.clone();
+                let committed = tokio::task::spawn_blocking(move || {
+                    commit_process_ingress_batch(&task_app, shard, &inputs)
+                })
+                .await;
+                match committed {
+                    Ok(Ok(results)) => {
+                        for (request, result) in requests.into_iter().zip(results) {
+                            let _ = request.response.send(Ok(result));
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        let message = format!("{error:#}");
+                        for request in requests {
+                            let _ = request.response.send(Err(message.clone()));
+                        }
+                    }
+                    Err(error) => {
+                        let message = format!("process ingress task failed: {error}");
+                        for request in requests {
+                            let _ = request.response.send(Err(message.clone()));
+                        }
+                    }
                 }
             }
-            Ok(Err(error)) => {
-                let message = format!("{error:#}");
-                for request in requests {
-                    let _ = request.response.send(Err(message.clone()));
-                }
+            ProcessPartitionCommand::Poll { request, response } => {
+                let task_app = app.clone();
+                let polled = tokio::task::spawn_blocking(move || {
+                    poll_process_partition(&task_app, shard, request)
+                })
+                .await;
+                let result = match polled {
+                    Ok(Ok(activation)) => Ok(activation),
+                    Ok(Err(error)) => Err(format!("{error:#}")),
+                    Err(error) => Err(format!("process partition poll failed: {error}")),
+                };
+                let _ = response.send(result);
             }
-            Err(error) => {
-                let message = format!("process ingress task failed: {error}");
-                for request in requests {
-                    let _ = request.response.send(Err(message.clone()));
-                }
+            ProcessPartitionCommand::Complete {
+                completion,
+                response,
+            } => {
+                let task_app = app.clone();
+                let completed = tokio::task::spawn_blocking(move || {
+                    complete_process_partition(&task_app, shard, completion)
+                })
+                .await;
+                let result = match completed {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => Err(format!("{error:#}")),
+                    Err(error) => Err(format!("process partition completion failed: {error}")),
+                };
+                let _ = response.send(result);
+            }
+            ProcessPartitionCommand::Renew { renewal, response } => {
+                let task_app = app.clone();
+                let renewed = tokio::task::spawn_blocking(move || {
+                    renew_process_partition_lease(&task_app, shard, renewal)
+                })
+                .await;
+                let result = match renewed {
+                    Ok(Ok(lease_expires)) => Ok(lease_expires),
+                    Ok(Err(error)) => Err(format!("{error:#}")),
+                    Err(error) => Err(format!("process partition renewal failed: {error}")),
+                };
+                let _ = response.send(result);
             }
         }
     }
@@ -935,18 +999,18 @@ pub(crate) async fn admit_process_records(
     let mut receivers = Vec::new();
     for (shard, records) in grouped {
         let sender = app
-            .ingress_senders
+            .partition_senders
             .get(shard)
             .and_then(Option::as_ref)
             .ok_or_else(|| anyhow!("process ingress shard {shard} is unavailable"))?;
         let (response, receiver) = oneshot::channel();
         sender
-            .send(ProcessIngressRequest {
+            .send(ProcessPartitionCommand::Ingress(ProcessIngressRequest {
                 process_id: process_id.to_owned(),
                 records,
                 detailed,
                 response,
-            })
+            }))
             .await
             .map_err(|_| anyhow!("process ingress shard {shard} stopped"))?;
         receivers.push(receiver);
@@ -1073,7 +1137,40 @@ pub(crate) async fn poll_process_batch(
     if data_shards == 0 {
         return Ok(Json(None::<ProcessActivationBatch>));
     }
-    let shard = 1 + usize::try_from(request.shard_cursor % data_shards as u64)?;
+    let shard = match request.partition_id {
+        Some(partition_id) => {
+            let shard = usize::try_from(partition_id)?;
+            if shard == 0 || shard > data_shards {
+                return Err(ApiError(anyhow!(
+                    "process partition {partition_id} is outside the data partitions"
+                )));
+            }
+            shard
+        }
+        None => 1 + usize::try_from(request.shard_cursor % data_shards as u64)?,
+    };
+    let sender = app
+        .partition_senders
+        .get(shard)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| anyhow!("process partition {shard} is unavailable"))?;
+    let (response, receiver) = oneshot::channel();
+    sender
+        .send(ProcessPartitionCommand::Poll { request, response })
+        .await
+        .map_err(|_| anyhow!("process partition {shard} stopped"))?;
+    let activation = receiver
+        .await
+        .map_err(|_| anyhow!("process partition poll response was dropped"))?
+        .map_err(|error| anyhow!(error))?;
+    Ok(Json(activation))
+}
+
+pub(crate) fn poll_process_partition(
+    app: &AppState,
+    shard: usize,
+    request: PollRequest,
+) -> Result<Option<ProcessActivationBatch>> {
     let mut activation_batch = None;
     app.commit_shard(shard, |transaction| {
         let timestamp = now();
@@ -1123,6 +1220,9 @@ pub(crate) async fn poll_process_batch(
             return Ok(());
         }
         let token = Uuid::new_v4().to_string();
+        let (owner_epoch, activation_sequence) =
+            next_process_partition_activation(transaction, &app.runtime_id, shard)?;
+        let lease_expires = timestamp + request.lease_seconds;
         let mut executions = Vec::new();
         let mut envelopes = Vec::new();
         let selected: Vec<_> = candidates.into_iter().take(max_size).collect();
@@ -1153,14 +1253,20 @@ pub(crate) async fn poll_process_batch(
                 &ProcessBatchLease {
                     process_id: process_id.clone(),
                     shard: shard as u32,
+                    owner_epoch,
+                    activation_sequence,
                     worker_id: request.worker_id.clone(),
-                    lease_expires: timestamp + request.lease_seconds,
+                    lease_expires,
                     executions,
                 },
             )?;
             activation_batch = Some(ProcessActivationBatch {
                 protocol_version: PROTOCOL_VERSION,
                 lease_token: token,
+                partition_id: u32::try_from(shard)?,
+                owner_epoch,
+                activation_sequence,
+                lease_expires,
                 process_id,
                 workflow_type: process.workflow_type.clone(),
                 build_id: process.active_build_id.clone(),
@@ -1170,7 +1276,7 @@ pub(crate) async fn poll_process_batch(
         }
         Ok(())
     })?;
-    Ok(Json(activation_batch))
+    Ok(activation_batch)
 }
 
 pub(crate) async fn complete_process_batch(
@@ -1185,24 +1291,69 @@ pub(crate) async fn complete_process_batch(
     if completion.protocol_version != PROTOCOL_VERSION {
         return Err(ApiError(anyhow!("unsupported protocol version")));
     }
+    let shard = usize::try_from(completion.partition_id)?;
+    let data_shards = app.shard_locks.len().saturating_sub(1);
+    if shard == 0 || shard > data_shards {
+        return Err(ApiError(anyhow!(
+            "process partition {} is outside the data partitions",
+            completion.partition_id,
+        )));
+    }
+    let sender = app
+        .partition_senders
+        .get(shard)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| anyhow!("process partition {shard} is unavailable"))?;
+    let (response, receiver) = oneshot::channel();
+    sender
+        .send(ProcessPartitionCommand::Complete {
+            completion,
+            response,
+        })
+        .await
+        .map_err(|_| anyhow!("process partition {shard} stopped"))?;
+    receiver
+        .await
+        .map_err(|_| anyhow!("process partition completion response was dropped"))?
+        .map_err(|error| anyhow!(error))?;
+    Ok(Json(json!({})))
+}
+
+pub(crate) fn complete_process_partition(
+    app: &AppState,
+    shard: usize,
+    completion: ProcessCompletionBatch,
+) -> Result<()> {
     let token = completion.lease_token;
     let lease_key = process_batch_lease_key(&token);
     let lease = app
         .store
         .get::<ProcessBatchLease>(&lease_key)?
         .ok_or_else(|| anyhow!("process task lease lost"))?;
-    let shard = lease.shard as usize;
     let process_id = lease.process_id.clone();
+    if lease.shard as usize != shard {
+        bail!("process task lease lost");
+    }
     if completion.items.len() != lease.executions.len() {
-        return Err(ApiError(anyhow!("incomplete process task batch")));
+        bail!("incomplete process task batch");
+    }
+    if completion.partition_id != lease.shard
+        || completion.owner_epoch != lease.owner_epoch
+        || completion.activation_sequence != lease.activation_sequence
+    {
+        bail!("process task lease lost");
     }
     let data_shards = app.shard_locks.len().saturating_sub(1).max(1);
     app.commit_shard(shard, |transaction| {
         let current_lease = transaction
             .get::<ProcessBatchLease>(&lease_key)?
             .ok_or_else(|| anyhow!("process task lease lost"))?;
+        let owner_epoch = owned_process_partition_epoch(transaction, &app.runtime_id, shard)?;
         if current_lease.shard as usize != shard
             || current_lease.process_id != process_id
+            || current_lease.owner_epoch != owner_epoch
+            || current_lease.owner_epoch != completion.owner_epoch
+            || current_lease.activation_sequence != completion.activation_sequence
             || current_lease.executions.len() != completion.items.len()
         {
             bail!("process task lease lost");
@@ -1247,7 +1398,70 @@ pub(crate) async fn complete_process_batch(
         dispatch_sharded_process(transaction, &process, shard, data_shards, &mut shard_state)?;
         transaction.put(state_key, &shard_state)
     })?;
-    Ok(Json(json!({})))
+    Ok(())
+}
+
+pub(crate) async fn renew_process_lease(
+    State(app): State<AppState>,
+    Json(renewal): Json<ProcessLeaseRenewal>,
+) -> Result<impl IntoResponse, ApiError> {
+    if renewal.protocol_version != PROTOCOL_VERSION {
+        return Err(ApiError(anyhow!("unsupported protocol version")));
+    }
+    if !renewal.extend_seconds.is_finite() || renewal.extend_seconds <= 0.0 {
+        return Err(ApiError(anyhow!("extend_seconds must be positive")));
+    }
+    let shard = usize::try_from(renewal.partition_id)?;
+    let data_shards = app.shard_locks.len().saturating_sub(1);
+    if shard == 0 || shard > data_shards {
+        return Err(ApiError(anyhow!(
+            "process partition {} is outside the data partitions",
+            renewal.partition_id,
+        )));
+    }
+    let sender = app
+        .partition_senders
+        .get(shard)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| anyhow!("process partition {shard} is unavailable"))?;
+    let (response, receiver) = oneshot::channel();
+    sender
+        .send(ProcessPartitionCommand::Renew { renewal, response })
+        .await
+        .map_err(|_| anyhow!("process partition {shard} stopped"))?;
+    let lease_expires = receiver
+        .await
+        .map_err(|_| anyhow!("process partition renewal response was dropped"))?
+        .map_err(|error| anyhow!(error))?;
+    Ok(Json(json!({"lease_expires": lease_expires})))
+}
+
+pub(crate) fn renew_process_partition_lease(
+    app: &AppState,
+    shard: usize,
+    renewal: ProcessLeaseRenewal,
+) -> Result<f64> {
+    let lease_key = process_batch_lease_key(&renewal.lease_token);
+    let mut lease_expires = 0.0;
+    app.commit_shard(shard, |transaction| {
+        let owner_epoch = owned_process_partition_epoch(transaction, &app.runtime_id, shard)?;
+        let mut lease = transaction
+            .get::<ProcessBatchLease>(&lease_key)?
+            .ok_or_else(|| anyhow!("process task lease lost"))?;
+        if lease.shard as usize != shard
+            || lease.owner_epoch != owner_epoch
+            || lease.owner_epoch != renewal.owner_epoch
+            || lease.activation_sequence != renewal.activation_sequence
+        {
+            bail!("process task lease lost");
+        }
+        lease.lease_expires = lease
+            .lease_expires
+            .max(now() + renewal.extend_seconds.min(300.0));
+        lease_expires = lease.lease_expires;
+        transaction.put(lease_key, &lease)
+    })?;
+    Ok(lease_expires)
 }
 
 pub(crate) async fn get_process(

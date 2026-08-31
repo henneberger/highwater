@@ -6,13 +6,13 @@ The programming model should remain one durable keyed Process even as execution 
 
 Each key hashes to a WAL lane. A lane is a serial durability boundary, while different lanes append and execute concurrently. One versioned WAL record can atomically admit thousands of inputs or complete a leased batch. The record is synced before acknowledgement, then applied to RocksDB with its local WAL disabled. RocksDB provides indexed reads and checkpoint files; it is not the recovery authority.
 
-Ready executions carry their input and prior state, and leases carry the complete activation batch. An executor crash therefore needs no reconstruction from transient application memory. Success commits state, output, lease removal, active-key release, and the next mailbox dispatch together. Failure or lease revocation leaves the prior state intact and makes the same durable input runnable again.
+Ready executions carry their input and prior state, and leases carry the complete activation batch. An executor crash therefore needs no reconstruction from transient application memory. Success commits state, output, lease removal, active-key release, and the next mailbox dispatch together. Failure or lease revocation leaves the prior state intact and makes the same durable input runnable again. Application execution already spreads across independent processes or hosts using disjoint partition assignments; every renewal and completion is fenced by the current durable partition-owner epoch and activation sequence.
 
 Checkpoints publish a vector of per-lane positions before deleting covered WAL objects. Controlled compaction follows checkpoint publication, bounding file count and read amplification without putting compaction on every acknowledgement path.
 
 ## Multi-host data plane
 
-The next architecture keeps the state machine and replaces its storage and ownership adapters:
+The service-side state-machine owners currently share one process. The next architecture makes those owners independently placeable while keeping the implemented external execution assignment and replacing the storage and ownership adapters:
 
 1. A shard leader appends to a three-replica log with quorum acknowledgement, or to an object store using conditional creation and a fenced compare-and-swap head.
 2. A monotonically increasing ownership epoch is present on every append, lease, checkpoint, and completion. A stale owner cannot acknowledge work after reassignment.

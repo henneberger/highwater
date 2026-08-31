@@ -6,6 +6,19 @@ Evolve Highwater from sharded durable storage with external execution into parti
 
 This plan does not add customer-facing infrastructure concepts. Partitions, logs, ownership, checkpoint handles, and execution placement remain platform implementation details.
 
+## Implemented milestone
+
+The first partition-runtime increment is complete:
+
+- admission, activation polling, renewal, and completion enter one serialized command loop per local partition;
+- each service incarnation installs a durable owner epoch, and restart recovery immediately requeues work from the superseded epoch;
+- every activation and completion carries its partition, owner epoch, activation sequence, and lease token;
+- completion and renewal revalidate that fence in the same partition transaction that changes durable state;
+- execution instances can be assigned disjoint partition sets and run on separate hosts;
+- the runtime renews active invocations without involving application code.
+
+The current owner loops are local to one service process. The next architectural increment is remote owner placement with a conditional-write or replicated log, followed by causal dependencies, incremental partition checkpoints, and end-to-end credit propagation. This distinction matters: distributed application compute is implemented, while automatic multi-host state ownership is not.
+
 ## Invariants
 
 The implementation must preserve these properties throughout the migration:
@@ -41,7 +54,7 @@ cross-partition messages ─►│   ├── Process mailboxes              �
 
 A partition has one durable owner epoch. It serializes state-machine decisions while allowing storage, application execution, checkpoint upload, and independent partitions to proceed concurrently.
 
-## Phase 1: partition runtime
+## Phase 1: partition runtime (implemented locally)
 
 Introduce a `PartitionRuntime` for each locally owned virtual partition.
 
@@ -118,7 +131,7 @@ The tuple `(source_partition, source_owner_epoch, source_log_position)` is the m
 
 Use commit dependencies for Process messages, operator edges, window output, join changes, watermark propagation, and transactional output. Do not introduce distributed two-phase commit.
 
-## Phase 4: invocation fencing and renewal
+## Phase 4: invocation fencing and renewal (implemented locally)
 
 Every activation contains:
 
@@ -237,9 +250,9 @@ Track admission throughput, committed-transition throughput, group-commit size, 
 
 ## Recommended implementation order
 
-1. Partition runtime and command protocol.
+1. Extend the local partition runtime into remotely placeable owners.
 2. Partition-local append pipeline and group commit.
-3. Owner epochs on every streaming mutation and invocation.
+3. Extend owner epochs from invocation paths to every streaming mutation.
 4. Causal commit dependencies and durable partition inboxes.
 5. Asynchronous partition checkpoints.
 6. Credit-based backpressure across edges and ingestion.

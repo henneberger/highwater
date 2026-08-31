@@ -1,0 +1,54 @@
+name: Deploy documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/deploy-docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-highwater-docs
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  SITE_BUCKET: highwater.cloud
+  CLOUDFRONT_DISTRIBUTION_ID: E39RH62G88AJTS
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: website/yarn.lock
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::846199521923:role/highwater-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build documentation
+        working-directory: website
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+      - name: Publish documentation
+        run: |
+          aws s3 sync website/build/ "s3://${SITE_BUCKET}/docs/" \
+            --delete \
+            --cache-control "public,max-age=300"
+          aws s3 sync website/build/assets/ "s3://${SITE_BUCKET}/docs/assets/" \
+            --cache-control "public,max-age=31536000,immutable"
+      - name: Refresh documentation cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --paths "/docs/*"

@@ -1,0 +1,48 @@
+name: Deploy landing page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/deploy-landing.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-highwater-landing
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  SITE_BUCKET: highwater.cloud
+  CLOUDFRONT_DISTRIBUTION_ID: E39RH62G88AJTS
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::846199521923:role/highwater-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Validate landing page
+        run: test -f landing/index.html
+      - name: Publish landing page
+        run: |
+          aws s3 sync landing/ "s3://${SITE_BUCKET}/" \
+            --delete \
+            --exclude "docs/*" \
+            --cache-control "public,max-age=300"
+          aws s3 cp landing/index.html "s3://${SITE_BUCKET}/index.html" \
+            --content-type "text/html" \
+            --cache-control "public,max-age=60"
+      - name: Refresh landing page cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --paths "/" "/index.html" "/app.js" "/config.js" "/styles.css" "/robots.txt" "/sitemap.xml" "/assets/*"

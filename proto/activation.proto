@@ -1,0 +1,371 @@
+syntax = "proto3";
+
+package temporal_code.protocol.v1;
+
+message Payload {
+  enum Encoding {
+    ENCODING_UNSPECIFIED = 0;
+    JSON = 1;
+    PROTOBUF = 2;
+    ARROW_IPC_STREAM = 3;
+    RAW = 4;
+  }
+
+  Encoding encoding = 1;
+  map<string, string> metadata = 2;
+  bytes data = 3;
+  string object_ref = 4;
+  bytes sha256 = 5;
+}
+
+message Event {
+  uint64 id = 1;
+  string workflow_id = 2;
+  string type = 3;
+  Payload attributes = 4;
+  double created_at = 5;
+}
+
+message Command {
+  string type = 1;
+  Payload attributes = 2;
+}
+
+message WorkflowActivation {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  string workflow_id = 3;
+  string workflow_type = 4;
+  uint32 attempt = 5;
+  repeated Event history = 6;
+  optional string build_id = 7;
+}
+
+message WorkerPollRequest {
+  uint32 protocol_version = 1;
+  string worker_id = 2;
+  optional string task_queue = 3;
+  repeated string build_ids = 4;
+  double lease_seconds = 5;
+  uint64 shard_cursor = 6;
+}
+
+message WorkflowCompletion {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  uint64 history_event_id = 3;
+  repeated Command commands = 4;
+  string failure = 5;
+}
+
+message ProcessActivation {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  string process_id = 3;
+  string workflow_type = 4;
+  string build_id = 5;
+  uint32 attempt = 6;
+  Payload envelope = 7;
+  uint32 shard = 8;
+}
+
+message ProcessCompletion {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  Payload result = 3;
+  string failure = 4;
+}
+
+message ActivityTask {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  uint64 id = 3;
+  string workflow_id = 4;
+  string name = 5;
+  repeated Payload args = 6;
+  uint32 attempt = 7;
+  double lease_seconds = 8;
+  double start_to_close_timeout = 9;
+}
+
+message QueryTask {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  string workflow_id = 3;
+  string workflow_type = 4;
+  string name = 5;
+  repeated Payload args = 6;
+  repeated Event history = 7;
+}
+
+message QueryCompletion {
+  uint32 protocol_version = 1;
+  bytes task_token = 2;
+  Payload result = 3;
+  string error = 4;
+}
+
+message EventTimeRecord {
+  string stream = 1;
+  uint32 partition = 2;
+  uint64 offset = 3;
+  uint64 sequence = 4;
+  double event_time = 5;
+  double ingestion_time = 6;
+  string key = 7;
+  Payload value = 8;
+  bool late = 9;
+  bool too_late = 10;
+  string change_kind = 11;
+  optional string event_id = 12;
+  uint32 key_group = 13;
+  uint64 owner_epoch = 14;
+  optional string source_id = 15;
+  optional uint32 source_partition = 16;
+  optional uint64 source_offset = 17;
+  optional uint64 source_epoch = 18;
+}
+
+message PartitionWatermark {
+  string stream = 1;
+  uint32 partition = 2;
+  double event_time = 3;
+  bool idle = 4;
+  bool sealed = 5;
+}
+
+message WatermarkStrategy {
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    BOUNDED = 1;
+    MONOTONIC = 2;
+    SOURCE_MANAGED = 3;
+  }
+
+  Mode mode = 1;
+  double max_out_of_orderness = 2;
+  optional double idle_timeout = 3;
+  optional double alignment_max_drift = 4;
+}
+
+message StreamWatermark {
+  string stream = 1;
+  double event_time = 2;
+  bool finalized = 3;
+}
+
+message WatermarkTimer {
+  string stream = 1;
+  string workflow_id = 2;
+  uint64 command_id = 3;
+  double event_time = 4;
+}
+
+message FixedWindowSchedule {
+  string schedule_id = 1;
+  string stream = 2;
+  string workflow_type = 3;
+  string task_queue = 4;
+  double window_size = 5;
+  double next_window_start = 6;
+  bool emit_empty_windows = 7;
+  double start_at = 8;
+  string aggregation = 9;
+  double slide = 10;
+  string value_field = 11;
+}
+
+message CheckpointManifest {
+  string checkpoint_id = 1;
+  uint64 sequence = 2;
+  double created_at = 3;
+  string object_path = 4;
+  map<string, string> state_handles = 5;
+  map<uint32, uint64> shard_sequences = 6;
+}
+
+message CheckpointAcknowledgement {
+  string node_id = 1;
+  string state_handle = 2;
+  map<uint32, uint64> key_group_epochs = 3;
+  double acknowledged_at = 4;
+}
+
+message CheckpointBarrier {
+  string checkpoint_id = 1;
+  uint64 sequence = 2;
+  string status = 3;
+  repeated string expected_nodes = 4;
+  repeated CheckpointAcknowledgement acknowledgements = 5;
+}
+
+message KeyGroupLease {
+  uint32 key_group = 1;
+  string owner = 2;
+  uint64 epoch = 3;
+  double lease_expires = 4;
+}
+
+message SourceCursor {
+  string source_id = 1;
+  uint32 partition = 2;
+  uint64 next_offset = 3;
+  string stream = 4;
+}
+
+message SourceLease {
+  string stream = 1;
+  uint32 partition = 2;
+  string source_id = 3;
+  uint64 epoch = 4;
+  double lease_expires = 5;
+}
+
+message DifferentialChange {
+  string operator_id = 1;
+  uint64 sequence = 2;
+  optional string key = 3;
+  double event_time = 4;
+  string row_kind = 5;
+  sint64 diff = 6;
+  Payload row = 7;
+}
+
+message OperatorEdge {
+  string operator_id = 1;
+  string output_stream = 2;
+  string status = 3;
+  uint64 changes_forwarded = 4;
+}
+
+message DurableProcess {
+  enum EventTimeGate {
+    EVENT_TIME_GATE_UNSPECIFIED = 0;
+    IMMEDIATE = 1;
+    COMPLETE = 2;
+  }
+
+  string process_id = 1;
+  string input_stream = 2;
+  string workflow_type = 3;
+  string task_queue = 4;
+  EventTimeGate event_time_gate = 5;
+  uint32 max_concurrent_keys = 6;
+  uint64 mailbox_capacity = 7;
+  uint64 pending = 8;
+  uint64 running = 9;
+  uint64 completed = 10;
+  uint64 failed = 11;
+  optional string key_field = 12;
+  optional string event_time_field = 13;
+  uint32 state_version = 14;
+  string active_build_id = 15;
+  uint32 batch_max_size = 16;
+  double batch_max_delay = 17;
+}
+
+message ProcessTransition {
+  Payload state = 1;
+  optional Payload emit = 2;
+}
+
+message ProcessState {
+  uint32 version = 1;
+  string build_id = 2;
+  Payload value = 3;
+  uint64 input_sequence = 4;
+  double event_time = 5;
+}
+
+message StreamBatchCommit {
+  string batch_id = 1;
+  string stream = 2;
+  uint64 first_sequence = 3;
+  uint64 last_sequence = 4;
+  uint64 records = 5;
+  double committed_at = 6;
+}
+
+message ProcessMailboxItem {
+  string process_id = 1;
+  uint64 sequence = 2;
+  string key = 3;
+  double event_time = 4;
+  EventTimeRecord record = 5;
+}
+
+message OutboxMessage {
+  string sink = 1;
+  string message_id = 2;
+  string workflow_id = 3;
+  Payload payload = 4;
+  uint32 delivery_attempt = 5;
+  optional double acked_at = 6;
+}
+
+message TemporalJoin {
+  string join_id = 1;
+  string probe_stream = 2;
+  string version_stream = 3;
+  string workflow_type = 4;
+  string task_queue = 5;
+  string join_type = 6;
+}
+
+message TemporalJoinOutput {
+  string join_id = 1;
+  EventTimeRecord probe = 2;
+  optional EventTimeRecord version = 3;
+  double as_of = 4;
+  optional double watermark = 5;
+  optional string workflow_id = 6;
+}
+
+message IntervalJoin {
+  string join_id = 1;
+  string left_stream = 2;
+  string right_stream = 3;
+  string workflow_type = 4;
+  string task_queue = 5;
+  double lower_bound = 6;
+  double upper_bound = 7;
+  string join_type = 8;
+}
+
+message IntervalJoinOutput {
+  string join_id = 1;
+  EventTimeRecord left = 2;
+  EventTimeRecord right = 3;
+  string workflow_id = 4;
+}
+
+message Deduplicate {
+  string operator_id = 1;
+  string stream = 2;
+  string workflow_type = 3;
+  string task_queue = 4;
+}
+
+message DeduplicateOutput {
+  string operator_id = 1;
+  EventTimeRecord record = 2;
+  bool canonical = 3;
+  EventTimeRecord canonical_record = 4;
+  optional string workflow_id = 5;
+}
+
+message StreamFilter {
+  string operator_id = 1;
+  string stream = 2;
+  string workflow_type = 3;
+  string task_queue = 4;
+  string field = 5;
+  string comparison = 6;
+  Payload operand = 7;
+}
+
+message StreamFilterOutput {
+  string operator_id = 1;
+  EventTimeRecord record = 2;
+  string workflow_id = 3;
+}

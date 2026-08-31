@@ -181,6 +181,8 @@ pub struct QueryCompletion {
 pub struct PollRequest {
     pub protocol_version: u32,
     pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_token: Option<String>,
     #[serde(default)]
     pub task_queue: Option<String>,
     #[serde(default)]

@@ -1,9 +1,16 @@
 use crate::*;
 pub async fn run() -> Result<()> {
     let mut listen = "127.0.0.1:7233".to_owned();
+    let mut execution_listen = None;
     let mut state_dir = PathBuf::from("temporal-code-rust-state");
     let mut object_dir = PathBuf::from("temporal-code-rust-objects");
+    let mut journal_uri = None;
     let mut node_id = "local".to_owned();
+    let mut endpoint = String::new();
+    let mut control_plane = true;
+    let mut owned_partitions: Option<HashSet<usize>> = None;
+    let mut execution_identity_file = None;
+    let mut cluster_token_file = None;
     let mut key_group_count = 128_u32;
     let mut lease_seconds = 15.0_f64;
     let mut log_shards =
@@ -12,6 +19,13 @@ pub async fn run() -> Result<()> {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--listen" => listen = arguments.next().context("--listen requires a value")?,
+            "--execution-listen" => {
+                execution_listen = Some(
+                    arguments
+                        .next()
+                        .context("--execution-listen requires a value")?,
+                );
+            }
             "--state-dir" => {
                 state_dir = PathBuf::from(arguments.next().context("--state-dir requires a value")?)
             }
@@ -22,7 +36,45 @@ pub async fn run() -> Result<()> {
                         .context("--object-store-dir requires a value")?,
                 )
             }
+            "--journal" => {
+                journal_uri = Some(arguments.next().context("--journal requires a value")?);
+            }
             "--node-id" => node_id = arguments.next().context("--node-id requires a value")?,
+            "--advertise-endpoint" => {
+                endpoint = arguments
+                    .next()
+                    .context("--advertise-endpoint requires a value")?;
+            }
+            "--data-plane-only" => control_plane = false,
+            "--execution-identity-file" => {
+                execution_identity_file = Some(PathBuf::from(
+                    arguments
+                        .next()
+                        .context("--execution-identity-file requires a value")?,
+                ));
+            }
+            "--cluster-token-file" => {
+                cluster_token_file = Some(PathBuf::from(
+                    arguments
+                        .next()
+                        .context("--cluster-token-file requires a value")?,
+                ));
+            }
+            "--process-partitions" => {
+                let value = arguments
+                    .next()
+                    .context("--process-partitions requires a value")?;
+                owned_partitions = Some(
+                    value
+                        .split(',')
+                        .map(|partition| {
+                            partition
+                                .parse::<usize>()
+                                .context("invalid process partition")
+                        })
+                        .collect::<Result<HashSet<_>>>()?,
+                );
+            }
             "--key-groups" => {
                 key_group_count = arguments
                     .next()
@@ -56,46 +108,98 @@ pub async fn run() -> Result<()> {
             "node-id must be non-empty; key-groups and lease-seconds must be positive; log-shards must be 2..256"
         );
     }
+    if endpoint.is_empty() {
+        endpoint = format!("http://{}", execution_listen.as_deref().unwrap_or(&listen));
+    }
+    reqwest::Url::parse(&endpoint).context("advertise endpoint must be an absolute URL")?;
+    if let Some(partitions) = &owned_partitions
+        && partitions
+            .iter()
+            .any(|partition| *partition == 0 || *partition >= log_shards)
+    {
+        bail!(
+            "process partitions must be between 1 and {}",
+            log_shards - 1
+        );
+    }
     let mut partition_senders = vec![None];
     let mut partition_receivers = Vec::new();
     for shard in 1..log_shards {
+        if owned_partitions
+            .as_ref()
+            .is_some_and(|partitions| !partitions.contains(&shard))
+        {
+            partition_senders.push(None);
+            continue;
+        }
         let (sender, receiver) = mpsc::channel::<ProcessPartitionCommand>(4_096);
         partition_senders.push(Some(sender));
         partition_receivers.push((shard, receiver));
     }
     let runtime_id = format!("{node_id}:{}", Uuid::new_v4());
+    let cluster_token = cluster_token_file
+        .map(fs::read_to_string)
+        .transpose()?
+        .map(|token| token.trim().to_owned());
+    if journal_uri.is_some() && cluster_token.as_ref().is_none_or(|token| token.len() < 32) {
+        bail!("remote journals require a cluster token of at least 32 bytes");
+    }
+    let execution_identities = execution_identity_file
+        .map(|path| -> Result<Vec<ExecutionIdentity>> {
+            let file: ExecutionIdentityFile = serde_json::from_slice(&fs::read(path)?)?;
+            let mut tokens = HashSet::new();
+            if file.identities.iter().any(|identity| {
+                identity.token.len() < 32
+                    || identity.task_queue.trim().is_empty()
+                    || identity.build_ids.is_empty()
+                    || !tokens.insert(identity.token.clone())
+            }) {
+                bail!(
+                    "execution identities require a unique 32-byte token, task queue, and build IDs"
+                );
+            }
+            Ok(file.identities)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if journal_uri.is_some() && execution_listen.is_none() {
+        bail!("remote journals require a separate execution listener");
+    }
+    if journal_uri.is_some() && execution_identities.is_empty() {
+        bail!("remote journals require deployment-scoped execution identities");
+    }
     let state = AppState {
-        store: Arc::new(DurableStore::open_sharded(
+        store: Arc::new(DurableStore::open_sharded_with_journal(
             &state_dir,
             &object_dir,
             log_shards,
+            journal_uri.as_deref(),
         )?),
         mutation_lock: Arc::new(Mutex::new(())),
         shard_locks: Arc::new((0..log_shards).map(|_| Mutex::new(())).collect()),
         partition_senders: Arc::new(partition_senders),
         node_id,
         runtime_id,
+        endpoint,
+        control_plane,
+        execution_identities: Arc::new(execution_identities),
+        cluster_token,
+        http_client: HttpClient::new(),
         key_group_count,
         lease_seconds,
         query_queue: Arc::new(Mutex::new(VecDeque::new())),
         query_results: Arc::new(Mutex::new(HashMap::new())),
     };
-    initialize_key_groups(&state)?;
+    if state.control_plane {
+        initialize_key_groups(&state)?;
+    }
     initialize_process_partitions(&state)?;
     recover_process_tasks(&state, true)?;
     for (shard, receiver) in partition_receivers {
         tokio::spawn(process_partition_loop(state.clone(), shard, receiver));
     }
     tokio::spawn(event_time_maintenance_loop(state.clone()));
-    let app = Router::new()
-        .route("/workflows", post(start_workflow))
-        .route("/workflows/{id}", get(get_workflow))
-        .route("/workflows/{id}/history", get(history))
-        .route("/workflows/{id}/signals/{name}", post(signal))
-        .route("/workflows/{id}/updates/{name}", post(update))
-        .route("/workflows/{id}/queries/{name}", post(query_workflow))
-        .route("/workflows/{id}/cancel", post(cancel))
-        .route("/workflows/{id}/terminate", post(terminate))
+    let internal_app = Router::new()
         .route("/internal/v1/workflow-tasks/poll", post(poll_workflow))
         .route(
             "/internal/v1/workflow-tasks/poll-batch",
@@ -121,6 +225,10 @@ pub async fn run() -> Result<()> {
             "/internal/v1/process-tasks/renew",
             post(renew_process_lease),
         )
+        .route(
+            "/internal/v1/processes/{process_id}/partitions/{partition}/events",
+            post(append_remote_process_records),
+        )
         .route("/internal/v1/activity-tasks/poll", post(poll_activity))
         .route(
             "/internal/v1/activity-tasks/complete",
@@ -132,6 +240,16 @@ pub async fn run() -> Result<()> {
         )
         .route("/internal/v1/query-tasks/poll", post(poll_query))
         .route("/internal/v1/query-tasks/complete", post(complete_query))
+        .with_state(state.clone());
+    let public_app = Router::new()
+        .route("/workflows", post(start_workflow))
+        .route("/workflows/{id}", get(get_workflow))
+        .route("/workflows/{id}/history", get(history))
+        .route("/workflows/{id}/signals/{name}", post(signal))
+        .route("/workflows/{id}/updates/{name}", post(update))
+        .route("/workflows/{id}/queries/{name}", post(query_workflow))
+        .route("/workflows/{id}/cancel", post(cancel))
+        .route("/workflows/{id}/terminate", post(terminate))
         .route("/streams", post(create_stream))
         .route("/streams/{stream}", get(get_stream))
         .route(
@@ -228,6 +346,11 @@ pub async fn run() -> Result<()> {
             get(pending_checkpoint_barriers),
         )
         .route("/admin/key-groups", get(list_key_groups))
+        .route("/admin/process-partitions", get(list_process_partitions))
+        .route(
+            "/admin/process-partitions/{partition}/transfer",
+            post(transfer_process_partition),
+        )
         .route(
             "/admin/key-groups/{key_group}/assign",
             post(assign_key_group),
@@ -238,6 +361,18 @@ pub async fn run() -> Result<()> {
             post(ack_sink_message),
         )
         .with_state(state);
+    let app = if let Some(execution_listen) = execution_listen {
+        let listener = TcpListener::bind(&execution_listen).await?;
+        println!("temporal-code execution gateway listening on {execution_listen}");
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, internal_app).await {
+                eprintln!("execution gateway stopped: {error}");
+            }
+        });
+        public_app
+    } else {
+        public_app.merge(internal_app)
+    };
     let listener = TcpListener::bind(&listen).await?;
     println!("temporal-code Rust core listening on {listen}");
     axum::serve(listener, app).await?;

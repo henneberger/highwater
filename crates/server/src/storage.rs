@@ -46,13 +46,15 @@ pub(crate) struct DurableStore {
     pub(crate) checkpoint_dir: PathBuf,
     pub(crate) manifest_path: PathBuf,
     pub(crate) sequences: Vec<Mutex<u64>>,
+    journal: Option<RemoteJournal>,
 }
 
 impl DurableStore {
-    pub(crate) fn open_sharded(
+    pub(crate) fn open_sharded_with_journal(
         state_dir: &FsPath,
         object_dir: &FsPath,
         log_shards: usize,
+        journal_uri: Option<&str>,
     ) -> Result<Self> {
         if log_shards == 0 {
             bail!("log_shards must be positive");
@@ -60,13 +62,17 @@ impl DurableStore {
         let checkpoint_dir = object_dir.join("rust-core/checkpoints");
         let manifest_path = object_dir.join("rust-core/checkpoint-manifest.json");
         fs::create_dir_all(&checkpoint_dir)?;
-        if (!state_dir.exists() || fs::read_dir(state_dir)?.next().is_none())
-            && let Some(manifest) = Self::read_manifest(&manifest_path)?
-        {
-            if state_dir.exists() {
-                fs::remove_dir(state_dir)?;
+        if !state_dir.exists() || fs::read_dir(state_dir)?.next().is_none() {
+            let restored_remote = journal_uri
+                .map(|uri| RemoteJournal::restore_latest(uri, state_dir))
+                .transpose()?
+                .unwrap_or(false);
+            if !restored_remote && let Some(manifest) = Self::read_manifest(&manifest_path)? {
+                if state_dir.exists() {
+                    fs::remove_dir_all(state_dir)?;
+                }
+                Self::copy_checkpoint(&checkpoint_dir.join(&manifest.checkpoint_id), state_dir)?;
             }
-            Self::copy_checkpoint(&checkpoint_dir.join(&manifest.checkpoint_id), state_dir)?;
         }
         fs::create_dir_all(state_dir)?;
         let wal_dir = object_dir.join("rust-core/wal");
@@ -97,16 +103,46 @@ impl DurableStore {
         options.set_max_write_buffer_number(4);
         options.set_disable_auto_compactions(true);
         let db = DB::open(&options, state_dir)?;
+        let applied_sequences = (0..log_shards)
+            .map(|shard| -> Result<u64> {
+                Ok(db
+                    .get(format!("meta/applied_sequence/{shard:04}").as_bytes())?
+                    .map(|bytes| rmp_serde::from_slice::<u64>(&bytes))
+                    .transpose()?
+                    .unwrap_or(0))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let (journal, mut remote_records) = match journal_uri {
+            Some(uri) => {
+                let (journal, records) = RemoteJournal::open(uri, &applied_sequences)?;
+                (Some(journal), Some(records))
+            }
+            None => (None, None),
+        };
         let mut sequences = Vec::with_capacity(log_shards);
         for shard in 0..log_shards {
             let shard_dir = wal_dir.join(format!("shard-{shard:04}"));
             fs::create_dir_all(&shard_dir)?;
-            let applied_key = format!("meta/applied_sequence/{shard:04}");
-            let applied = db
-                .get(applied_key.as_bytes())?
-                .map(|bytes| rmp_serde::from_slice::<u64>(&bytes))
-                .transpose()?
-                .unwrap_or(0);
+            let applied = applied_sequences[shard];
+            if let Some(records) = remote_records.as_mut() {
+                let mut sequence = applied;
+                for recovered in std::mem::take(&mut records[shard]) {
+                    let record: WalRecord = rmp_serde::from_slice(&recovered.payload)
+                        .with_context(|| {
+                            format!(
+                                "decode remote WAL shard {shard} position {}",
+                                recovered.position
+                            )
+                        })?;
+                    if record.shard as usize != shard || record.sequence != recovered.position {
+                        bail!("remote WAL record does not match its journal position");
+                    }
+                    Self::apply_record(&db, &record, shard)?;
+                    sequence = record.sequence;
+                }
+                sequences.push(Mutex::new(sequence));
+                continue;
+            }
             let mut records = Vec::new();
             for entry in fs::read_dir(&shard_dir)? {
                 let path = entry?.path();
@@ -138,6 +174,7 @@ impl DurableStore {
             checkpoint_dir,
             manifest_path,
             sequences,
+            journal,
         })
     }
 
@@ -207,6 +244,38 @@ impl DurableStore {
         self.commit_shard(0, mutations)
     }
 
+    pub(crate) fn sync_remote_shard(&self, shard: usize) -> Result<()> {
+        let Some(journal) = &self.journal else {
+            return Ok(());
+        };
+        let mut current = self
+            .sequences
+            .get(shard)
+            .ok_or_else(|| anyhow!("log shard {shard} does not exist"))?
+            .lock()
+            .map_err(|_| anyhow!("sequence lock poisoned"))?;
+        let records = journal.sync(u32::try_from(shard)?, *current)?;
+        for recovered in records {
+            let record: WalRecord = rmp_serde::from_slice(&recovered.payload)?;
+            if record.shard as usize != shard
+                || record.sequence != recovered.position
+                || record.sequence != *current + 1
+            {
+                bail!("remote WAL shard {shard} returned a non-contiguous record");
+            }
+            Self::apply_record(&self.db, &record, shard)?;
+            *current = record.sequence;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn sync_all_remote(&self) -> Result<()> {
+        for shard in 0..self.sequences.len() {
+            self.sync_remote_shard(shard)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn commit_shard(&self, shard: usize, mutations: Vec<Mutation>) -> Result<()> {
         if mutations.is_empty() {
             return Ok(());
@@ -255,6 +324,20 @@ impl DurableStore {
         let final_path = shard_dir.join(format!("{sequence:020}.mpk"));
         let temporary = shard_dir.join(format!(".{sequence:020}-{}.tmp", Uuid::new_v4()));
         let encoded = rmp_serde::to_vec_named(&record)?;
+        if let Some(journal) = &self.journal {
+            let owner_epoch = if shard == 0 {
+                1
+            } else {
+                self.owner_epoch_for(shard, &record)?
+            };
+            let position = journal.append(u32::try_from(shard)?, owner_epoch, encoded)?;
+            if position != sequence {
+                bail!("remote WAL shard {shard} advanced to {position}, expected {sequence}");
+            }
+            Self::apply_record(&self.db, &record, shard)?;
+            *current = sequence;
+            return Ok(());
+        }
         let mut file = File::create(&temporary)?;
         file.write_all(&encoded)?;
         file.sync_all()?;
@@ -263,6 +346,18 @@ impl DurableStore {
         Self::apply_record(&self.db, &record, shard)?;
         *current = sequence;
         Ok(())
+    }
+
+    fn owner_epoch_for(&self, shard: usize, record: &WalRecord) -> Result<u64> {
+        let owner_key = process_partition_owner_key(shard);
+        for (key, value) in &record.puts {
+            if key == &owner_key {
+                return Ok(rmp_serde::from_slice::<ProcessPartitionOwner>(value)?.epoch);
+            }
+        }
+        self.get::<ProcessPartitionOwner>(&owner_key)?
+            .map(|owner| owner.epoch)
+            .ok_or_else(|| anyhow!("process partition {shard} has no durable owner epoch"))
     }
 
     pub(crate) fn apply_record(db: &DB, record: &WalRecord, shard: usize) -> Result<()> {
@@ -320,6 +415,7 @@ impl DurableStore {
     }
 
     pub(crate) fn prepare_checkpoint(&self) -> Result<CheckpointManifest> {
+        self.sync_all_remote()?;
         let currents = self
             .sequences
             .iter()
@@ -355,6 +451,12 @@ impl DurableStore {
     }
 
     pub(crate) fn publish_checkpoint(&self, manifest: &CheckpointManifest) -> Result<()> {
+        if let Some(journal) = &self.journal {
+            journal.publish_checkpoint(
+                manifest.clone(),
+                self.checkpoint_dir.join(&manifest.checkpoint_id),
+            )?;
+        }
         let manifest_temporary = self
             .manifest_path
             .with_extension(format!("{}.tmp", Uuid::new_v4()));

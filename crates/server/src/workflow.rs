@@ -285,6 +285,7 @@ pub(crate) async fn poll_workflow(
     if request.protocol_version != PROTOCOL_VERSION {
         return Err(ApiError(anyhow!("unsupported protocol version")));
     }
+    state.authorize_poll(&request)?;
     let mut activation = None;
     state.commit(|transaction| {
         fire_timers(transaction)?;
@@ -352,6 +353,7 @@ pub(crate) async fn poll_workflow_batch(
     if request.protocol_version != PROTOCOL_VERSION {
         return Err(ApiError(anyhow!("unsupported protocol version")));
     }
+    state.authorize_poll(&request)?;
     let mut activations = Vec::new();
     state.commit(|transaction| {
         fire_timers(transaction)?;
@@ -942,6 +944,10 @@ pub(crate) async fn poll_activity(
     State(state): State<AppState>,
     Json(request): Json<PollRequest>,
 ) -> Result<Response, ApiError> {
+    if request.protocol_version != PROTOCOL_VERSION {
+        return Err(ApiError(anyhow!("unsupported protocol version")));
+    }
+    state.authorize_poll(&request)?;
     let mut selected = None;
     state.commit(|transaction| {
         let timestamp = now();
@@ -1071,6 +1077,7 @@ pub(crate) async fn poll_query(
     if request.protocol_version != PROTOCOL_VERSION {
         return Err(ApiError(anyhow!("unsupported protocol version")));
     }
+    state.authorize_poll(&request)?;
     let mut queue = state
         .query_queue
         .lock()

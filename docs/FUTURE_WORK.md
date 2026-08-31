@@ -2,15 +2,15 @@
 
 Durability and distribution now take precedence over adding operators. Keep this order:
 
-1. Replace the filesystem WAL adapter with object-store conditional writes, a CAS manifest, leader epochs, and fencing.
-2. Upload only changed RocksDB checkpoint files; full checkpoints already bound WAL replay.
-3. Move the local partition command loops into remotely placeable shard owners while preserving their durable epochs.
-4. Move invocation transport from HTTP/JSON to the versioned Protobuf protocol with long polling or streaming RPC.
+1. Run deterministic S3 fault injection around ambiguous head writes, checkpoint publication, source death, and target activation.
+2. Upload content-addressed changed checkpoint files instead of each full RocksDB checkpoint.
+3. Add automatic partition placement and load-aware movement on top of the implemented manual handoff.
+4. Move invocation and cluster transport from HTTP/JSON to the versioned Protobuf protocol with streaming RPC.
 5. Complete Process build pinning and migration compatibility across rolling deployments.
-6. Add durable activation revocation and a configurable maximum total invocation duration; runtime-controlled renewal and owner-epoch fencing are implemented.
-7. Add automatic partition assignment, sticky Process caches, and batched durable commits.
+6. Add a configurable maximum total invocation duration; durable revocation, runtime renewal, and owner-epoch fencing are implemented.
+7. Add sticky Process caches and extend group commit to every transition type.
 8. Materialize large Arrow IPC payloads in object storage and keep references in history.
-9. Expand failover, nondeterminism, observability, and history-inspection coverage.
+9. Expand nondeterminism, observability, and history-inspection coverage.
 
 Do not add more language SDKs or a cluster control plane until the first four items are complete.
 
@@ -19,7 +19,7 @@ Do not add more language SDKs or a cluster control plane until the first four it
 The fixed-window, temporal-join, bounded interval-join, and event-time keep-first deduplication operators now have durable state, deterministic Process outputs, and idempotent deployment. The remaining work is:
 
 1. Move keyed operator execution to remote owners; keys and input writes already carry fenced key-group epochs.
-2. Replace the filesystem object adapter with conditional object-store writes and incremental checkpoint upload; full RocksDB checkpoints and an atomic manifest are implemented.
+2. Convert full object-store checkpoints to content-addressed incremental partition checkpoints.
 3. Add sink-specific adapters; source cursors and the leased transactional outbox provide the current idempotent exactly-once boundary.
 4. Add schema-declared composite primary keys; full changelog row kinds and signed operator differences are implemented.
 5. Add checkpoint size, state-retention, late-record, watermark-lag, and backpressure metrics.

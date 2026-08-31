@@ -12,6 +12,8 @@ An ingestion response is successful only after the event and its identity are du
 
 If execution fails before commit, Highwater retries from the durable input and prior state. If the original completion arrives after ownership changed, fencing rejects it.
 
+Each partition advances through a conditionally updated durable head. Checkpoints live in object storage; local state and execution hosts can be discarded and rebuilt. Ownership transfer advances the same durable generation used to validate invocation completion.
+
 ## Checkpoints
 
 Asynchronous checkpoints compact committed state and bound replay time. They do not define whether an individual event is safe: acknowledged events after the latest checkpoint remain in the durable log and replay during recovery.

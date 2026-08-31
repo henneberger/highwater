@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import os
 import time
 import traceback
 import uuid
@@ -51,6 +52,7 @@ class RustWorker:
         process_shard_offset: int = 0,
         process_partitions: tuple[int, ...] | None = None,
         process_only: bool = False,
+        execution_token: str | None = None,
     ) -> None:
         self.registry = registry
         self.runner = WorkflowRunner(registry)
@@ -72,6 +74,7 @@ class RustWorker:
         self._process_shard_cursor = process_shard_offset
         self._process_partitions = process_partitions
         self._process_only = process_only
+        self._execution_token = execution_token
         default_process_poll_width = (
             8
             if any(
@@ -102,6 +105,7 @@ class RustWorker:
         return {
             "protocol_version": 1,
             "worker_id": self.worker_id,
+            "execution_token": self._execution_token,
             "task_queue": self.task_queue,
             "build_ids": self.registry.build_ids(),
             "lease_seconds": self.lease_seconds,
@@ -420,6 +424,7 @@ def main() -> None:
             else None
         ),
         process_only=arguments.process_only,
+        execution_token=os.environ.get("HIGHWATER_EXECUTION_TOKEN"),
     )
     try:
         asyncio.run(worker.run_forever())

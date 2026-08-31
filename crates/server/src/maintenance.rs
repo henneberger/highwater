@@ -43,14 +43,20 @@ pub(crate) fn recover_process_tasks(app: &AppState, recover_orphans: bool) -> Re
     }
     for (shard, leases) in expired_by_shard {
         app.commit_shard(shard, |transaction| {
+            let owner = transaction
+                .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
+                .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+            if owner.owner != app.runtime_id
+                || owner.status != "ACTIVE"
+                || owner.lease_expires <= now()
+            {
+                return Ok(());
+            }
             for (lease_key, _) in leases {
                 let Some(lease) = transaction.get::<ProcessBatchLease>(&lease_key)? else {
                     continue;
                 };
-                let owner = transaction
-                    .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
-                    .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
-                let orphaned = owner.owner != app.runtime_id || owner.epoch != lease.owner_epoch;
+                let orphaned = owner.epoch != lease.owner_epoch;
                 if lease.lease_expires > now() && !(recover_orphans && orphaned) {
                     continue;
                 }
@@ -75,11 +81,16 @@ pub(crate) async fn event_time_maintenance_loop(app: AppState) {
     loop {
         interval.tick().await;
         ticks = ticks.wrapping_add(1);
-        if let Err(error) = maintain_event_time(&app) {
-            eprintln!("event-time maintenance failed: {error:#}");
+        if app.control_plane {
+            if let Err(error) = maintain_event_time(&app) {
+                eprintln!("event-time maintenance failed: {error:#}");
+            }
+            if let Err(error) = renew_key_groups(&app) {
+                eprintln!("key-group lease renewal failed: {error:#}");
+            }
         }
-        if let Err(error) = renew_key_groups(&app) {
-            eprintln!("key-group lease renewal failed: {error:#}");
+        if let Err(error) = initialize_process_partitions(&app) {
+            eprintln!("process partition acquisition failed: {error:#}");
         }
         if let Err(error) = renew_process_partitions(&app) {
             eprintln!("process partition renewal failed: {error:#}");
@@ -92,7 +103,10 @@ pub(crate) async fn event_time_maintenance_loop(app: AppState) {
                     .into_iter()
                     .any(|(_, lease)| lease.lease_expires > now() && lease.owner != app.node_id)
             });
-        if !has_remote_owner && let Err(error) = app.store.checkpoint_if_needed(512) {
+        if app.control_plane
+            && !has_remote_owner
+            && let Err(error) = app.store.checkpoint_if_needed(512)
+        {
             eprintln!("checkpoint maintenance failed: {error:#}");
         }
         if ticks.is_multiple_of(20)
@@ -305,6 +319,99 @@ pub(crate) async fn list_key_groups(
         .collect();
     leases.sort_by_key(|lease| lease.key_group);
     Ok(Json(leases))
+}
+
+pub(crate) async fn list_process_partitions(
+    State(app): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    app.store.sync_all_remote()?;
+    let mut owners = app
+        .store
+        .scan::<ProcessPartitionOwner>("process-partition-owner/")?
+        .into_iter()
+        .map(|(_, owner)| owner)
+        .collect::<Vec<_>>();
+    owners.sort_by_key(|owner| owner.partition_id);
+    Ok(Json(owners))
+}
+
+pub(crate) async fn transfer_process_partition(
+    State(app): State<AppState>,
+    Path(partition): Path<u32>,
+    Json(request): Json<TransferProcessPartitionRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let shard = partition as usize;
+    if shard == 0 || shard >= app.shard_locks.len() {
+        return Err(ApiError(anyhow!(
+            "process partition {partition} does not exist"
+        )));
+    }
+    if request.target_node.trim().is_empty() || request.target_endpoint.trim().is_empty() {
+        return Err(ApiError(anyhow!(
+            "target_node and target_endpoint must not be empty"
+        )));
+    }
+    app.commit_shard(shard, |transaction| {
+        let key = process_partition_owner_key(shard);
+        let mut owner = transaction
+            .get::<ProcessPartitionOwner>(&key)?
+            .ok_or_else(|| anyhow!("process partition {partition} is unassigned"))?;
+        if owner.owner != app.runtime_id
+            || owner.epoch != request.expected_epoch
+            || owner.status != "ACTIVE"
+        {
+            bail!("process partition {partition} transfer was fenced");
+        }
+        owner.status = "DRAINING".to_owned();
+        owner.lease_expires = now() + app.lease_seconds;
+        transaction.put(key, &owner)
+    })?;
+    app.commit_shard(shard, |transaction| {
+        for (lease_key, lease) in
+            transaction.scan::<ProcessBatchLease>(process_batch_lease_prefix())?
+        {
+            if lease.shard != partition {
+                continue;
+            }
+            for execution in lease.executions {
+                transaction.put(
+                    process_ready_key(
+                        shard,
+                        &execution.execution.process_id,
+                        execution.execution.sequence,
+                    ),
+                    &execution,
+                )?;
+            }
+            transaction.delete(lease_key);
+        }
+        Ok(())
+    })?;
+    let checkpoint = app.store.checkpoint()?;
+    let mut transferred = None;
+    app.commit_shard(shard, |transaction| {
+        let key = process_partition_owner_key(shard);
+        let mut owner = transaction
+            .get::<ProcessPartitionOwner>(&key)?
+            .ok_or_else(|| anyhow!("process partition {partition} is unassigned"))?;
+        if owner.owner != app.runtime_id
+            || owner.epoch != request.expected_epoch
+            || owner.status != "DRAINING"
+        {
+            bail!("process partition {partition} changed while draining");
+        }
+        owner.owner = format!("{}:pending", request.target_node);
+        owner.node_id.clone_from(&request.target_node);
+        owner.endpoint.clone_from(&request.target_endpoint);
+        owner.epoch = owner.epoch.saturating_add(1);
+        owner.lease_expires = now() + app.lease_seconds;
+        owner.status = "RESTORING".to_owned();
+        owner.checkpoint_id = Some(checkpoint.checkpoint_id.clone());
+        transaction.put(key, &owner)?;
+        transferred = Some(owner);
+        Ok(())
+    })?;
+    Ok(Json(transferred.expect("partition transfer committed")))
 }
 
 pub(crate) async fn assign_key_group(

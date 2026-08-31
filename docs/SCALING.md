@@ -12,13 +12,20 @@ Checkpoints publish a vector of per-lane positions before deleting covered WAL o
 
 ## Multi-host data plane
 
-The service-side state-machine owners currently share one process. The next architecture makes those owners independently placeable while keeping the implemented external execution assignment and replacing the storage and ownership adapters:
+Service-side partition owners are independently placeable. Each owner materializes its journal in local RocksDB and synchronizes control metadata before a partition transition. Managed ingestion reads the fenced owner record and forwards a batch over the authenticated cluster transport; customers continue using one ingestion endpoint.
 
-1. A shard leader appends to a three-replica log with quorum acknowledgement, or to an object store using conditional creation and a fenced compare-and-swap head.
-2. A monotonically increasing ownership epoch is present on every append, lease, checkpoint, and completion. A stale owner cannot acknowledge work after reassignment.
-3. Each owner keeps ready, mailbox, active-key, timer, and deduplication indexes in memory and in local RocksDB. Recovery loads an immutable checkpoint and replays the authoritative log tail.
-4. Checkpoints upload immutable changed files, publish a vector manifest with compare-and-swap, then garbage-collect only objects covered by a published manifest.
-5. Credit-based admission propagates capacity from execution pools through shard owners to producers. Overload delays or rejects admission before a source cursor is committed.
+Each partition append first creates an immutable record and then conditionally advances its S3 head. Ownership, invocation renewal, and completion use that same serial boundary. The owner epoch may stay constant or advance by exactly one, so delayed nodes cannot skip generations or commit against a stale ETag.
+
+Migration follows a fail-closed handoff:
+
+1. the source changes the partition from `ACTIVE` to `DRAINING`;
+2. active grants are durably revoked and their inputs return to the ready queue;
+3. all journal tails are synchronized and an immutable checkpoint is published;
+4. a conditional append installs the target node at a higher epoch in `RESTORING`;
+5. the target restores the checkpoint, replays the tail, and conditionally enters `ACTIVE`;
+6. routing observes the new owner, while every old grant and completion remains fenced.
+
+Warm targets may subscribe to an overlapping desired partition set before movement. They do not acquire an unexpired partition assigned elsewhere. A failed source becomes eligible for takeover only after lease expiry; time enables liveness, while the conditional epoch append provides safety.
 
 Adding machines then means reassigning fenced key groups and their checkpoint handles, not changing user code or introducing a topology API. A 10x load increase is handled by more independently owned lanes until a single hot key becomes the limit; one key remains intentionally serial to preserve its state semantics.
 

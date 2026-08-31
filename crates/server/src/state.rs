@@ -9,6 +9,11 @@ pub(crate) struct AppState {
     pub(crate) partition_senders: Arc<Vec<Option<mpsc::Sender<ProcessPartitionCommand>>>>,
     pub(crate) node_id: String,
     pub(crate) runtime_id: String,
+    pub(crate) endpoint: String,
+    pub(crate) control_plane: bool,
+    pub(crate) execution_identities: Arc<Vec<ExecutionIdentity>>,
+    pub(crate) cluster_token: Option<String>,
+    pub(crate) http_client: HttpClient,
     pub(crate) key_group_count: u32,
     pub(crate) lease_seconds: f64,
     pub(crate) query_queue: Arc<Mutex<VecDeque<(String, QueryTask)>>>,
@@ -16,6 +21,46 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
+    pub(crate) fn authorize_poll(&self, request: &PollRequest) -> Result<()> {
+        if self.execution_identities.is_empty() {
+            return Ok(());
+        }
+        let token = request
+            .execution_token
+            .as_deref()
+            .ok_or_else(|| anyhow!("execution identity is required"))?;
+        let identity = self
+            .execution_identities
+            .iter()
+            .find(|identity| constant_time_equal(identity.token.as_bytes(), token.as_bytes()))
+            .ok_or_else(|| anyhow!("execution identity is invalid"))?;
+        if request.task_queue.as_deref() != Some(identity.task_queue.as_str())
+            || request
+                .build_ids
+                .iter()
+                .any(|build_id| !identity.build_ids.contains(build_id))
+        {
+            bail!("execution identity is not authorized for this deployment");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorize_cluster(&self, headers: &HeaderMap) -> Result<()> {
+        let expected = self
+            .cluster_token
+            .as_deref()
+            .ok_or_else(|| anyhow!("cluster transport is disabled"))?;
+        let supplied = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or_else(|| anyhow!("cluster identity is required"))?;
+        if !constant_time_equal(expected.as_bytes(), supplied.as_bytes()) {
+            bail!("cluster identity is invalid");
+        }
+        Ok(())
+    }
+
     pub(crate) fn commit<F>(&self, operation: F) -> Result<()>
     where
         F: FnOnce(&mut Transaction<'_>) -> Result<()>,
@@ -24,6 +69,7 @@ impl AppState {
             .mutation_lock
             .lock()
             .map_err(|_| anyhow!("mutation lock poisoned"))?;
+        self.store.sync_remote_shard(0)?;
         let mut transaction = Transaction {
             store: &self.store,
             changes: BTreeMap::new(),
@@ -48,6 +94,8 @@ impl AppState {
             .ok_or_else(|| anyhow!("log shard {shard} does not exist"))?
             .lock()
             .map_err(|_| anyhow!("shard mutation lock poisoned"))?;
+        self.store.sync_remote_shard(0)?;
+        self.store.sync_remote_shard(shard)?;
         let mut transaction = Transaction {
             store: &self.store,
             changes: BTreeMap::new(),
@@ -69,6 +117,16 @@ impl AppState {
             u32::try_from(self.shard_locks.len() - 1).unwrap(),
         ) as usize
     }
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        let left = left.get(index).copied().unwrap_or(0);
+        let right = right.get(index).copied().unwrap_or(0);
+        difference |= usize::from(left ^ right);
+    }
+    difference == 0
 }
 
 pub(crate) struct Transaction<'a> {

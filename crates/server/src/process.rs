@@ -832,6 +832,7 @@ pub(crate) fn commit_process_ingress_batch(
 ) -> Result<Vec<ProcessIngressResult>> {
     let mut results = Vec::with_capacity(requests.len());
     app.commit_shard(shard, |transaction| {
+        owned_process_partition_epoch(transaction, &app.runtime_id, shard)?;
         for (process_id, records, detailed) in requests {
             results.push(append_process_shard_records(
                 transaction,
@@ -975,6 +976,7 @@ pub(crate) async fn admit_process_records(
     records: Vec<AppendStreamRecordRequest>,
     detailed: bool,
 ) -> Result<ProcessIngressResult, ApiError> {
+    app.store.sync_remote_shard(0)?;
     let process = app
         .store
         .get::<DurableProcess>(&process_key(process_id))?
@@ -997,25 +999,67 @@ pub(crate) async fn admit_process_records(
             .push((index, record));
     }
     let mut receivers = Vec::new();
-    for (shard, records) in grouped {
-        let sender = app
-            .partition_senders
-            .get(shard)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| anyhow!("process ingress shard {shard} is unavailable"))?;
-        let (response, receiver) = oneshot::channel();
-        sender
-            .send(ProcessPartitionCommand::Ingress(ProcessIngressRequest {
-                process_id: process_id.to_owned(),
-                records,
-                detailed,
-                response,
-            }))
-            .await
-            .map_err(|_| anyhow!("process ingress shard {shard} stopped"))?;
-        receivers.push(receiver);
-    }
     let mut combined = ProcessIngressResult::default();
+    for (shard, records) in grouped {
+        app.store.sync_remote_shard(shard)?;
+        let owner = app
+            .store
+            .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
+            .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+        if owner.owner == app.runtime_id && owner.status == "ACTIVE" {
+            let sender = app
+                .partition_senders
+                .get(shard)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| anyhow!("process partition {shard} is not running locally"))?;
+            let (response, receiver) = oneshot::channel();
+            sender
+                .send(ProcessPartitionCommand::Ingress(ProcessIngressRequest {
+                    process_id: process_id.to_owned(),
+                    records,
+                    detailed,
+                    response,
+                }))
+                .await
+                .map_err(|_| anyhow!("process ingress shard {shard} stopped"))?;
+            receivers.push(receiver);
+            continue;
+        }
+        if owner.status != "ACTIVE" || owner.endpoint.is_empty() {
+            return Err(ApiError(
+                StreamCapacityError(format!("process partition {shard} is moving")).into(),
+            ));
+        }
+        let token = app
+            .cluster_token
+            .as_deref()
+            .ok_or_else(|| anyhow!("remote partition routing is not configured"))?;
+        let response = app
+            .http_client
+            .post(format!(
+                "{}/internal/v1/processes/{}/partitions/{shard}/events",
+                owner.endpoint.trim_end_matches('/'),
+                percent_encoding::utf8_percent_encode(
+                    process_id,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ))
+            .bearer_auth(token)
+            .json(&RemoteProcessIngressRequest { records, detailed })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ApiError(anyhow!(
+                "remote partition {shard} rejected ingress with {status}: {body}"
+            )));
+        }
+        let result: ProcessIngressResult = response.json().await?;
+        combined.responses.extend(result.responses);
+        combined.accepted += result.accepted;
+        combined.duplicates += result.duplicates;
+    }
     for receiver in receivers {
         let result = receiver
             .await
@@ -1027,6 +1071,47 @@ pub(crate) async fn admit_process_records(
     }
     combined.responses.sort_by_key(|(index, _)| *index);
     Ok(combined)
+}
+
+pub(crate) async fn append_remote_process_records(
+    headers: HeaderMap,
+    State(app): State<AppState>,
+    Path((process_id, partition)): Path<(String, u32)>,
+    Json(request): Json<RemoteProcessIngressRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    app.authorize_cluster(&headers)?;
+    let shard = partition as usize;
+    if shard == 0 || shard >= app.partition_senders.len() {
+        return Err(ApiError(anyhow!(
+            "process partition {partition} does not exist"
+        )));
+    }
+    app.store.sync_remote_shard(shard)?;
+    let owner = app
+        .store
+        .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
+        .ok_or_else(|| anyhow!("process partition {partition} is unassigned"))?;
+    if owner.owner != app.runtime_id || owner.status != "ACTIVE" {
+        return Err(ApiError(anyhow!("process partition {partition} is fenced")));
+    }
+    let sender = app.partition_senders[shard]
+        .as_ref()
+        .ok_or_else(|| anyhow!("process partition {partition} is not running locally"))?;
+    let (response, receiver) = oneshot::channel();
+    sender
+        .send(ProcessPartitionCommand::Ingress(ProcessIngressRequest {
+            process_id,
+            records: request.records,
+            detailed: request.detailed,
+            response,
+        }))
+        .await
+        .map_err(|_| anyhow!("process partition {partition} stopped"))?;
+    let result = receiver
+        .await
+        .map_err(|_| anyhow!("process partition ingress response was dropped"))?
+        .map_err(anyhow::Error::msg)?;
+    Ok(Json(result))
 }
 
 pub(crate) async fn append_process_records(
@@ -1133,6 +1218,7 @@ pub(crate) async fn poll_process_batch(
     if request.protocol_version != PROTOCOL_VERSION {
         return Err(ApiError(anyhow!("unsupported protocol version")));
     }
+    app.authorize_poll(&request)?;
     let data_shards = app.shard_locks.len().saturating_sub(1);
     if data_shards == 0 {
         return Ok(Json(None::<ProcessActivationBatch>));

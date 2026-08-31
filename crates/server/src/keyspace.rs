@@ -533,21 +533,44 @@ pub(crate) fn renew_key_groups(app: &AppState) -> Result<()> {
 
 pub(crate) fn initialize_process_partitions(app: &AppState) -> Result<()> {
     for shard in 1..app.shard_locks.len() {
+        if app.partition_senders[shard].is_none() {
+            continue;
+        }
         app.commit_shard(shard, |transaction| {
             let key = process_partition_owner_key(shard);
             let current = transaction.get::<ProcessPartitionOwner>(&key)?;
+            if let Some(owner) = &current {
+                if owner.owner == app.runtime_id
+                    && owner.status == "ACTIVE"
+                    && owner.lease_expires > now()
+                {
+                    return Ok(());
+                }
+                let same_node = owner.node_id == app.node_id
+                    || owner.node_id.is_empty()
+                        && owner.owner.starts_with(&format!("{}:", app.node_id));
+                let assigned_here = owner.status == "RESTORING" && owner.node_id == app.node_id;
+                if owner.lease_expires > now() && !same_node && !assigned_here {
+                    return Ok(());
+                }
+            }
             let epoch = current
                 .as_ref()
                 .map_or(1, |owner| owner.epoch.saturating_add(1));
-            let next_activation_sequence =
-                current.map_or(0, |owner| owner.next_activation_sequence);
+            let next_activation_sequence = current
+                .as_ref()
+                .map_or(0, |owner| owner.next_activation_sequence);
             transaction.put(
                 key,
                 &ProcessPartitionOwner {
                     partition_id: u32::try_from(shard)?,
                     owner: app.runtime_id.clone(),
+                    node_id: app.node_id.clone(),
+                    endpoint: app.endpoint.clone(),
                     epoch,
                     lease_expires: now() + app.lease_seconds,
+                    status: "ACTIVE".to_owned(),
+                    checkpoint_id: current.and_then(|owner| owner.checkpoint_id),
                     next_activation_sequence,
                 },
             )
@@ -565,7 +588,7 @@ pub(crate) fn next_process_partition_activation(
     let mut owner = transaction
         .get::<ProcessPartitionOwner>(&key)?
         .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
-    if owner.owner != runtime_id || owner.lease_expires <= now() {
+    if owner.owner != runtime_id || owner.status != "ACTIVE" || owner.lease_expires <= now() {
         bail!(
             "process partition {shard} is fenced at epoch {} and owned by {}",
             owner.epoch,
@@ -583,17 +606,16 @@ pub(crate) fn next_process_partition_activation(
 
 pub(crate) fn renew_process_partitions(app: &AppState) -> Result<()> {
     for shard in 1..app.shard_locks.len() {
+        if app.partition_senders[shard].is_none() {
+            continue;
+        }
         app.commit_shard(shard, |transaction| {
             let key = process_partition_owner_key(shard);
             let mut owner = transaction
                 .get::<ProcessPartitionOwner>(&key)?
                 .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
-            if owner.owner != app.runtime_id {
-                bail!(
-                    "process partition {shard} is fenced at epoch {} and owned by {}",
-                    owner.epoch,
-                    owner.owner,
-                );
+            if owner.owner != app.runtime_id || owner.status != "ACTIVE" {
+                return Ok(());
             }
             if owner.lease_expires <= now() + app.lease_seconds / 2.0 {
                 owner.lease_expires = now() + app.lease_seconds;
@@ -613,7 +635,7 @@ pub(crate) fn owned_process_partition_epoch(
     let owner = transaction
         .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
         .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
-    if owner.owner != runtime_id || owner.lease_expires <= now() {
+    if owner.owner != runtime_id || owner.status != "ACTIVE" || owner.lease_expires <= now() {
         bail!(
             "process partition {shard} is fenced at epoch {} and owned by {}",
             owner.epoch,
@@ -693,13 +715,24 @@ mod tests {
         ));
         let state_dir = root.join("state");
         let object_dir = root.join("objects");
+        let (partition_sender, _partition_receiver) = mpsc::channel(1);
         let mut app = AppState {
-            store: Arc::new(DurableStore::open_sharded(&state_dir, &object_dir, 2)?),
+            store: Arc::new(DurableStore::open_sharded_with_journal(
+                &state_dir,
+                &object_dir,
+                2,
+                None,
+            )?),
             mutation_lock: Arc::new(Mutex::new(())),
             shard_locks: Arc::new(vec![Mutex::new(()), Mutex::new(())]),
-            partition_senders: Arc::new(vec![None, None]),
+            partition_senders: Arc::new(vec![None, Some(partition_sender)]),
             node_id: "test".to_owned(),
             runtime_id: "test:first".to_owned(),
+            endpoint: "http://test".to_owned(),
+            control_plane: true,
+            execution_identities: Arc::new(Vec::new()),
+            cluster_token: None,
+            http_client: HttpClient::new(),
             key_group_count: 1,
             lease_seconds: 30.0,
             query_queue: Arc::new(Mutex::new(VecDeque::new())),

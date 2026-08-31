@@ -1,4 +1,5 @@
 mod error;
+mod journal;
 mod keyspace;
 mod maintenance;
 mod model;
@@ -16,11 +17,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::HeaderMap,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use reqwest::Client as HttpClient;
 use rocksdb::{DB, IteratorMode, Options, WriteBatch, WriteOptions, checkpoint::Checkpoint};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -51,6 +54,7 @@ use streaming::{
 };
 
 use error::*;
+use journal::*;
 use keyspace::*;
 use maintenance::*;
 use model::*;

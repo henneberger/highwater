@@ -131,7 +131,7 @@ pub(crate) fn default_late_policy() -> LatePolicy {
     LatePolicy::SideOutput
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AppendStreamRecordRequest {
     #[serde(default)]
     pub(crate) partition: u32,
@@ -493,10 +493,41 @@ pub(crate) struct ProcessShardState {
 pub(crate) struct ProcessPartitionOwner {
     pub(crate) partition_id: u32,
     pub(crate) owner: String,
+    #[serde(default)]
+    pub(crate) node_id: String,
+    #[serde(default)]
+    pub(crate) endpoint: String,
     pub(crate) epoch: u64,
     pub(crate) lease_expires: f64,
+    #[serde(default = "active_partition_status")]
+    pub(crate) status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_id: Option<String>,
     #[serde(default)]
     pub(crate) next_activation_sequence: u64,
+}
+
+fn active_partition_status() -> String {
+    "ACTIVE".to_owned()
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct TransferProcessPartitionRequest {
+    pub(crate) expected_epoch: u64,
+    pub(crate) target_node: String,
+    pub(crate) target_endpoint: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ExecutionIdentity {
+    pub(crate) token: String,
+    pub(crate) task_queue: String,
+    pub(crate) build_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ExecutionIdentityFile {
+    pub(crate) identities: Vec<ExecutionIdentity>,
 }
 
 pub(crate) struct ProcessIngressRequest {
@@ -522,7 +553,13 @@ pub(crate) enum ProcessPartitionCommand {
     },
 }
 
-#[derive(Default)]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct RemoteProcessIngressRequest {
+    pub(crate) records: Vec<(usize, AppendStreamRecordRequest)>,
+    pub(crate) detailed: bool,
+}
+
+#[derive(Default, Serialize, Deserialize)]
 pub(crate) struct ProcessIngressResult {
     pub(crate) responses: Vec<(usize, Value)>,
     pub(crate) accepted: usize,

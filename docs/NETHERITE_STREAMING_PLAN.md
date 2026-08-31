@@ -8,7 +8,7 @@ This plan does not add customer-facing infrastructure concepts. Partitions, logs
 
 ## Implemented milestone
 
-The first partition-runtime increment is complete:
+The partition-runtime and remote-ownership increments are complete:
 
 - admission, activation polling, renewal, and completion enter one serialized command loop per local partition;
 - each service incarnation installs a durable owner epoch, and restart recovery immediately requeues work from the superseded epoch;
@@ -16,8 +16,12 @@ The first partition-runtime increment is complete:
 - completion and renewal revalidate that fence in the same partition transaction that changes durable state;
 - execution instances can be assigned disjoint partition sets and run on separate hosts;
 - the runtime renews active invocations without involving application code.
+- partition journals use immutable S3 records and an ETag-conditional head as their linearization point;
+- managed ingress routes to owners on other service instances over authenticated cluster transport;
+- checkpoint-plus-tail handoff drains, fences, restores, and activates a partition at a higher epoch;
+- application workers run as warm, deployment-scoped sandbox pools without storage credentials.
 
-The current owner loops are local to one service process. The next architectural increment is remote owner placement with a conditional-write or replicated log, followed by causal dependencies, incremental partition checkpoints, and end-to-end credit propagation. This distinction matters: distributed application compute is implemented, while automatic multi-host state ownership is not.
+Automatic placement, content-addressed incremental partition checkpoints, streaming RPC transport, and end-to-end credit propagation remain. Manual placement and movement are the current correctness boundary; adding a balancer must not weaken it.
 
 ## Invariants
 
@@ -250,13 +254,11 @@ Track admission throughput, committed-transition throughput, group-commit size, 
 
 ## Recommended implementation order
 
-1. Extend the local partition runtime into remotely placeable owners.
-2. Partition-local append pipeline and group commit.
-3. Extend owner epochs from invocation paths to every streaming mutation.
-4. Causal commit dependencies and durable partition inboxes.
-5. Asynchronous partition checkpoints.
-6. Credit-based backpressure across edges and ingestion.
-7. Manual partition movement and failure recovery.
-8. Tiered state optimization and automatic balancing.
+1. Fault-inject the conditional journal and manual movement protocol.
+2. Make checkpoint files content-addressed and partition-local.
+3. Extend fenced ownership from Process partitions to every keyed operator mutation.
+4. Move cluster and invocation traffic to streaming RPC.
+5. Propagate credits across remote edges and ingestion.
+6. Add tiered state optimization and automatic balancing.
 
-The first four items form one architectural milestone. Completing only append batching without partition ownership and causal fencing improves a benchmark but does not implement the Netherite execution model.
+Automatic placement follows the manual protocol; it does not introduce a second ownership mechanism.

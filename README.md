@@ -162,7 +162,7 @@ Direct, non-idempotent external side effects can still occur more than once when
 
 The partition execution path completes 100,000 distinct durable keyed transitions at a median **99,951 events per second** with five execution instances on one development machine. The ordinary per-event handler reaches a median **89,029 events per second**. Every admission and completion is acknowledged only after its authoritative WAL append.
 
-Execution instances receive disjoint partition sets, so application compute can run on separate hosts without coordinating each event. Durable owner epochs and activation sequences fence delayed work after a service restart. Moving the partition state-machine owners themselves between service hosts remains part of the multi-host durability work described in [Scaling architecture](docs/SCALING.md).
+Execution instances and partition state-machine owners can run on separate hosts. Clustered deployments linearize each partition through a conditionally updated object-store head, route ingestion to its current owner, and move ownership through a checkpoint-plus-tail handoff. Durable owner epochs and activation sequences fence delayed work throughout restart or reassignment. See [Scaling architecture](docs/SCALING.md).
 
 See [Performance](docs/PERFORMANCE.md) for the reproducible benchmark, scaling results, and measurement boundary. One hot key remains serial by design; split the key or use a commutative aggregation when one entity needs internal parallelism.
 

@@ -9,6 +9,8 @@ Highwater groups Process keys into movable partitions. A partition has one durab
 
 Independent partitions run concurrently across hosts. Hot state remains close to execution, while cold state can move to lower-cost storage and load on demand.
 
+During movement, the source drains and checkpoints the partition before a higher ownership generation activates on the target. Ingestion continues through the managed endpoint and follows the new owner automatically. A delayed source cannot commit after the generation changes.
+
 ## Backpressure
 
 Capacity is communicated from execution through partition admission to producers. Highwater delays or rejects admission before a hidden queue grows without bound. SDKs retry with jitter; scheduled deployments retain already accepted input while compute is inactive.

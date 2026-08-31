@@ -1,6 +1,8 @@
 # Durability model
 
-The durable source of truth is the immutable object WAL, not local RocksDB and not the watermark. The control plane and keyed process lanes have independent WAL sequences. A process key always hashes to the same lane, so its input, mailbox, lease, state, applied offset, output changelog, and outbox records never cross an atomic boundary. Concurrent requests are group-committed within each lane and acknowledged only after the WAL object and directory entry are synced. RocksDB is then updated without its own WAL because it is a disposable materialized cache that startup can reconstruct.
+The durable source of truth is the partition journal, not local RocksDB and not the watermark. The control plane and keyed process lanes have independent sequences. A process key always hashes to the same lane, so its input, mailbox, lease, state, applied offset, output changelog, and outbox records never cross an atomic boundary. RocksDB is updated after journal commitment with its own WAL disabled because it is a disposable materialized cache.
+
+Clustered mode writes each transition as an immutable S3 object, then advances one partition-head object with an ETag conditional write. The head update is the linearization point. S3 provides strong read-after-write consistency and storage replication; competing or stale owners receive a failed precondition. An uncertain response is resolved by rereading the head and comparing the proposed record identity. Filesystem mode retains the same record encoding but is limited to single-node development.
 
 WAL records have an explicit format version and named outer fields. Format 2 stores puts, deletes, and range deletes in compact columns; recovery still reads format 1 records. An unknown format fails startup instead of guessing. This keeps the high-throughput representation evolvable without making durable state dependent on Rust struct field order.
 
@@ -12,7 +14,7 @@ Every per-key process state records:
 - the applied input sequence and event time;
 - the application state value.
 
-A checkpoint is a consistent RocksDB snapshot at a vector of WAL positions, one per lane. Checkpoint creation holds every lane sequence while RocksDB captures the snapshot, then publishes the manifest atomically. Recovery restores the newest published checkpoint and independently replays each lane after its recorded position. The checkpoint contains mailboxes, leased/running executions, ready indexes, per-key applied positions, watermarks, timers, source cursors, output state, and fenced ownership epochs. Changing the configured lane count for existing durable state is rejected.
+A checkpoint is a consistent RocksDB snapshot at a vector of journal positions, one per lane. Its immutable files are uploaded before the current-checkpoint pointer advances conditionally. Recovery downloads the newest published checkpoint and independently follows each partition's immutable journal tail. The checkpoint contains mailboxes, leased/running executions, ready indexes, per-key applied positions, watermarks, timers, source cursors, output state, and fenced ownership epochs. Changing the configured lane count for existing durable state is rejected.
 
 ## Failure behavior
 
@@ -34,8 +36,8 @@ Watermarks only describe event-time completeness. They are checkpointed with sta
 
 Process outputs enter a transactional outbox in the same completion commit. Delivery is at least once with deterministic message IDs. A sink obtains effectively exactly-once application by enforcing uniqueness on that ID or by participating in a checkpoint-aware transaction. Calling a non-idempotent external service directly from a batch handler is outside this guarantee.
 
-## Current trust boundary
+## Trust boundary
 
-The filesystem object-store implementation is crash durable when its directory resides on durable storage with the promised `fsync` semantics. WAL lanes execute in parallel, but they are not yet replicated across servers. Losing both the local RocksDB directory and the configured object-store directory loses the execution.
+Filesystem mode is crash durable only while its configured durable directory survives. Clustered mode requires a versioned S3 bucket, conditional-write permissions, least-privilege workload credentials, and an encrypted internal network. Compute hosts and local RocksDB directories are disposable. Object-store loss, credential compromise, deliberate deletion, or a correlated loss outside the bucket's durability contract remain disaster-recovery concerns.
 
-For company-grade high availability, the same WAL interface must be backed by either a quorum-replicated shard log or a conditional-write object store with a replicated low-latency ingress log. A three-replica/two-ack shard log can change the failure boundary without changing process, batching, checkpoint, or recovery semantics. Until that adapter and automated failover exist, the correct claim is single-node crash durability, not cluster high availability.
+Application sandboxes receive only a deployment-scoped execution capability. They do not receive journal, checkpoint, ownership, or cloud credentials. See [Execution isolation](EXECUTION_ISOLATION.md).

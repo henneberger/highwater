@@ -9,7 +9,7 @@ Highwater therefore separates three events:
 
 1. **Grant:** durable state records a random capability token and partition generation.
 2. **Eligibility:** the deadline passes, making the grant eligible for renewal or revocation.
-3. **Revocation:** a durable generation change invalidates the old capability before work is reassigned.
+3. **Revocation:** a durable state transition invalidates the capability before work is reassigned.
 
 A completion may commit if it linearizes before durable revocation, even if its wall-clock deadline just passed. Once revocation commits, the old token and generation are fenced and every later completion fails.
 
@@ -19,6 +19,6 @@ Long invocations renew before the deadline. Renewal is conditional on the same t
 
 ## Why both token and generation?
 
-The unguessable token identifies one invocation. The monotonic generation fences all work from a former partition owner, including delayed network messages after reassignment. Every state-changing completion validates both in the same durable transaction that commits the result.
+The unguessable token identifies one invocation and is fenced by revocation. The monotonic generation fences all work from a former partition owner, including delayed network messages after reassignment. Every state-changing completion validates both in the same durable transaction that commits the result.
 
 Leases provide liveness by detecting missing executors. Fencing provides safety by preventing stale executors from changing state.

@@ -1,0 +1,36 @@
+---
+title: Durable Processes
+description: Understand the unit of state, ordering, scheduling, and recovery.
+---
+
+A Process definition describes behavior; a Process key identifies one durable instance. Together they form the unit developers reason about:
+
+```text
+(Process definition, key)
+    = ordered inbox
+    + durable state
+    + timers and gates
+    + committed output
+```
+
+Only one conflicting transition commits for a key at a time. The runtime can execute different keys concurrently and can suspend an idle key without keeping a Python process or stack alive.
+
+## Scheduling
+
+Scheduling is an execution policy, not a different application type. A Process may run:
+
+- continuously as events arrive;
+- on demand after scaling from zero;
+- during scheduled drain windows;
+- after a durable timer;
+- after an event-time gate opens.
+
+Input remains durable while compute is unavailable.
+
+## Failure model
+
+An invocation is a retryable attempt, not the source of truth. The durable inbox and prior committed state reconstruct another attempt. A completion changes state only through a current, fenced commit.
+
+## Composition
+
+Processes can emit events to other Processes. Cross-partition messages carry commit dependencies so downstream computation may pipeline while commit order remains recoverable. Prefer message composition over sharing mutable state across keys.

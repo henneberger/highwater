@@ -1,0 +1,32 @@
+---
+title: Process options
+description: Process, event-time, batching, and deployment options.
+---
+
+## Process definition
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `key` | required | event field or callable selecting the Process key |
+| `state_version` | `1` | durable state schema version |
+| `event_time` | none | event timestamp field or callable |
+| `wait_until` | immediate | eligibility gate |
+| `late_events` | `"side_output"` | `drop`, `side_output`, or `update` |
+| `allowed_lateness` | `0` | time retained for supported revisions |
+
+## Batch handler
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `max_size` | required | largest application batch |
+| `max_delay` | required | maximum wait for the oldest eligible event |
+
+## Deployment
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--schedule` | continuous | cron schedule controlling compute drains |
+| `--env NAME=VALUE` | none | non-secret application configuration |
+| `--secret NAME` | none | secret mounted from the deployment environment |
+
+Durability, partitions, lease periods, checkpoint cadence, and storage tiers are service policy rather than application options.

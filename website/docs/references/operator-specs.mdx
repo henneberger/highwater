@@ -1,0 +1,50 @@
+---
+title: Operator specifications
+description: Fields and semantics for Highwater streaming operators.
+---
+
+Every operator has a stable `operator_id`, typed inputs, and a handler or output destination. Re-deploying the same specification is idempotent. An incompatible definition uses a new ID or an explicit migration.
+
+## FilterSpec
+
+| Field | Meaning |
+| --- | --- |
+| `operator_id` | stable identity |
+| `predicate` | deterministic boolean expression |
+| `handler` | Process receiving matching records |
+
+## WindowAggregateSpec
+
+| Field | Meaning |
+| --- | --- |
+| `key` | grouping expression |
+| `event_time` | timestamp expression |
+| `window` | tumbling or sliding window definition |
+| `aggregate` | incremental count, sum, min, max, or average |
+| `allowed_lateness` | retained revision interval |
+| `handler` | Process receiving inserts and supported revisions |
+
+## TemporalJoinSpec
+
+| Field | Meaning |
+| --- | --- |
+| `facts` | fact input |
+| `versions` | versioned reference input |
+| `key` | equality mapping between inputs |
+| `fact_time` | fact timestamp |
+| `valid_from` | version validity timestamp |
+| `where` | optional deterministic condition |
+| `handler` | Process receiving joined results and revisions |
+
+## IntervalJoinSpec
+
+| Field | Meaning |
+| --- | --- |
+| `left`, `right` | peer stream inputs |
+| `key` | equality mapping |
+| `lower_bound`, `upper_bound` | permitted event-time difference |
+| `join_type` | inner, left, right, or full |
+| `allowed_lateness` | retained revision interval |
+| `handler` | Process receiving changes |
+
+Specifications are deployment metadata. They do not introduce a separate query language or application topology API.

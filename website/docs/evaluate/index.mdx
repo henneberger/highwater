@@ -1,0 +1,18 @@
+---
+title: Evaluate Highwater
+description: Decide where durable streaming fits.
+---
+
+Highwater is for event-driven applications that need the flexibility of code and the recovery guarantees of a stream processor.
+
+It fits when:
+
+- state is naturally keyed by an account, device, user, order, or other entity;
+- events must remain ordered for each key;
+- processing must recover without application-written replay logic;
+- event time, late data, joins, or incremental aggregates matter;
+- load is bursty enough that elastic or scheduled execution is useful.
+
+It is not a replacement for a warehouse query engine or a low-level broker. Highwater owns event ingestion and execution so applications do not have to assemble either.
+
+Read [Why durable streaming](/evaluate/durable-streaming) and [Use cases](/evaluate/use-cases).

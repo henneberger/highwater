@@ -1,0 +1,23 @@
+---
+title: Recovery
+description: Understand automatic replay and application-visible outcomes.
+---
+
+When execution stops, Highwater restores the latest published checkpoint and replays every committed transition after it. Durable inboxes, timers, watermarks, join indexes, output, and invocation ownership recover together.
+
+Expected outcomes:
+
+| Failure point | Outcome |
+| --- | --- |
+| Before admission | producer retries with the same event ID |
+| After admission, before invocation | event remains queued |
+| During invocation | invocation can repeat |
+| During commit | the whole transition is present or absent |
+| After output commit, before delivery receipt | output can redeliver with the same message ID |
+| During ownership transfer | old generation is fenced |
+
+## Recovery objectives
+
+Checkpoints bound how much durable history must replay. Hot state can be rebuilt or fetched lazily while unaffected partitions resume. Recovery capacity is reserved separately from steady-state traffic so a host loss does not turn into an unbounded backlog.
+
+Applications should verify business invariants after a recovery exercise: no accepted event disappeared, per-key order held, state matches committed output, and duplicate external delivery remained harmless.

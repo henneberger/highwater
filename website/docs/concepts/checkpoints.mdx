@@ -1,0 +1,22 @@
+---
+title: Checkpoints and replay
+description: Bound recovery without putting periodic snapshots on the commit path.
+---
+
+Highwater continuously records committed transitions and periodically publishes an immutable checkpoint of materialized state.
+
+A checkpoint contains a consistent progress vector across owned partitions plus state handles. Publication is atomic: recovery sees either the prior complete checkpoint or the new complete checkpoint, never a partially published one.
+
+After publication, durable history covered by the checkpoint becomes eligible for tiering or cleanup. Cleanup never precedes publication.
+
+## Recovery
+
+Recovery:
+
+1. selects the latest compatible published checkpoint;
+2. restores or lazily opens its state;
+3. validates partition generations;
+4. replays every later committed record in order;
+5. rebuilds runnable indexes and resumes execution.
+
+An individual transition does not wait for the next checkpoint. Its own durable commit is the acknowledgement boundary. Checkpoints bound replay work, enable partition movement, and lower storage cost.

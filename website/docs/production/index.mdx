@@ -1,0 +1,14 @@
+---
+title: Operate Highwater
+description: Understand reliability, recovery, performance, and scale.
+---
+
+Highwater is operated around a simple service contract:
+
+- accepted events remain recoverable;
+- only current partition owners may commit;
+- Process state and emitted output commit atomically;
+- backpressure reaches ingestion;
+- deployments can move without changing application identity.
+
+Customers operate deployments and service objectives, not storage engines or execution hosts. Use this section to understand what the platform guarantees and how to diagnose application-level symptoms.

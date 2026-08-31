@@ -1,0 +1,34 @@
+---
+title: Event time
+description: Wait for source completeness and handle late events explicitly.
+---
+
+Event time says when an event happened in its source domain. Processing time says when Highwater executes it.
+
+Declare the timestamp field:
+
+```python
+@process.defn(
+    key="device_id",
+    event_time="observed_at",
+    wait_until=process.complete,
+)
+class DeviceMetrics:
+    ...
+```
+
+`process.complete` is an event-time gate. An event becomes eligible only when Highwater's watermark proves the input complete through that event's timestamp.
+
+## Watermarks
+
+Producers publish monotonic progress for each input partition. Highwater computes the deployment watermark from active partitions. A partition can declare itself idle so an empty source does not stop all progress; the next event reactivates it.
+
+## Late events
+
+Choose a policy per Process:
+
+- `drop` rejects events older than the accepted lateness boundary;
+- `side_output` routes them for inspection or correction;
+- `update` applies a retraction and corrected result when the operator supports it.
+
+Watermarks never imply that storage is durable. They are durable progress facts used by scheduling and operators.

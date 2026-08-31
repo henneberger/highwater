@@ -1,0 +1,40 @@
+---
+title: Safe upgrades
+description: Change Process code and state without reinterpreting in-flight work.
+---
+
+Every deployment is immutable and versioned. Highwater records which code version and state schema own each Process activation.
+
+## Compatible changes
+
+Additive handlers and optional state fields with defaults can usually roll forward directly:
+
+```python
+@process.defn(key="account_id", state_version=2)
+@dataclass
+class Balance:
+    total: int = 0
+    currency: str = "USD"
+```
+
+## State migrations
+
+Declare an explicit migration when an older state needs transformation:
+
+```python
+@Balance.migrate(from_version=1)
+def add_currency(state):
+    return {"total": state["total"], "currency": "USD"}
+```
+
+Migrations are deterministic, versioned, and committed with the first event using the new schema.
+
+## Rollout
+
+```bash
+highwater deploy app.py
+```
+
+The platform validates definitions, starts the new version, routes new activations only after it is ready, and drains work pinned to the previous version. Rollback changes routing; it never asks old code to decode newer state.
+
+Renaming a Process, changing its key, or changing event identity is a data migration. Deploy it as a new Process and backfill or redirect explicitly.

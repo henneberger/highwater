@@ -3,6 +3,9 @@
 __pycache__/
 *.pyc
 target/
+website/.docusaurus/
+website/build/
+website/node_modules/
 temporal-code-state/
 temporal-code-objects/
 temporal-code-rust-state/

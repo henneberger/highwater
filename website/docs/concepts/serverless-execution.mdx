@@ -1,0 +1,27 @@
+---
+title: Serverless execution
+description: Scale durable streaming code without coupling state to a container.
+---
+
+Highwater schedules an application as many keyed objects grouped into fewer movable partitions. This preserves the Process model while avoiding one operating-system process per key.
+
+## Pipelined durability
+
+Independent transitions share group commits. Causally dependent work can begin before every prior write finishes, but it cannot commit until its dependencies are durable. This hides storage latency without weakening recovery order.
+
+## Hot and cold state
+
+Frequently used state stays near compute. Checkpoints and colder state use durable storage so a partition can move or recover without requiring its previous host.
+
+## Workload-aware capacity
+
+Traffic varies by application. Highwater learns recent arrival patterns per deployment to:
+
+- keep capacity warm when another event is likely;
+- prewarm before a predictable burst or schedule;
+- scale to zero for long idle periods;
+- reserve recovery capacity separately from request capacity.
+
+Size-or-latency batching adapts within a warm invocation: full batches maximize throughput under load, while a deadline prevents sparse traffic from waiting indefinitely.
+
+These principles are informed by Microsoft Research's Netherite work on partitioned, pipelined durable execution and its production study of serverless arrival patterns. Highwater applies them to stateful event streams rather than exposing function hosts as the customer abstraction.

@@ -1,0 +1,50 @@
+---
+title: Set up Python
+description: Install Highwater and structure an application.
+---
+
+## Requirements
+
+Use Python 3.11 or newer.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install highwater
+```
+
+## Application layout
+
+Small applications can use one file:
+
+```text
+my-app/
+├── app.py
+└── requirements.txt
+```
+
+Larger applications can import Processes into one deployment entry point:
+
+```text
+my-app/
+├── app.py
+├── processes/
+│   ├── balances.py
+│   └── recommendations.py
+└── requirements.txt
+```
+
+```python title="app.py"
+from processes.balances import Balance
+from processes.recommendations import Recommendations
+
+__all__ = ["Balance", "Recommendations"]
+```
+
+Run locally with no infrastructure parameters:
+
+```bash
+highwater dev app.py
+```
+
+Use environment variables or your deployment environment for application secrets. Do not place credentials in Process state or event payloads.

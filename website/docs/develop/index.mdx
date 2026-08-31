@@ -1,0 +1,16 @@
+---
+title: Develop
+description: Build, run, and deploy Highwater applications.
+---
+
+A Highwater application is a Python module containing one or more durable Processes. Each Process declares its key, state, event handlers, and optional event-time or batching behavior.
+
+The typical loop is:
+
+1. Install `highwater`.
+2. Define a [Process](/develop/python/processes).
+3. Run `highwater dev app.py`.
+4. Publish through the [managed ingestion API](/develop/python/ingestion).
+5. Deploy with `highwater deploy app.py`.
+
+Application code never manages partition ownership, retries, checkpoints, or recovery. Those remain platform responsibilities.

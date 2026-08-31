@@ -1,0 +1,49 @@
+---
+title: Python API
+description: Public client, Process decorators, handles, and runtime calls.
+---
+
+## Client
+
+```python
+from highwater import Client
+
+client = Client()
+orders = client.process("Order")
+```
+
+| Method | Result |
+| --- | --- |
+| `Client()` | client configured from the local or deployment environment |
+| `client.process(name)` | `ProcessHandle` |
+| `client.close()` | closes client resources |
+
+## ProcessHandle
+
+| Method | Result |
+| --- | --- |
+| `send(event, *, event_id)` | durable admission receipt |
+| `send_many(events)` | receipts in input order |
+| `state(key)` | latest committed Process state |
+| `output(key, *, after=None)` | asynchronous committed output stream |
+
+## Decorators
+
+| Decorator | Purpose |
+| --- | --- |
+| `@process.defn(...)` | defines keying, state version, and event-time policy |
+| `@process.event` | handles one eligible event |
+| `@process.batch(...)` | handles a size-or-latency batch |
+| `@Process.migrate(from_version=N)` | migrates durable state |
+
+## Runtime
+
+| Call | Purpose |
+| --- | --- |
+| `process.key()` | current Process key |
+| `process.event_id()` | stable input identity |
+| `process.emit(event)` | emits transactional output |
+| `process.send(target, event)` | sends transactionally to another Process |
+| `process.wait_until(condition)` | suspends on a durable timer or event-time gate |
+
+Runtime calls are valid only inside a Process handler.

@@ -1,0 +1,49 @@
+---
+title: Processes
+description: Model ordered, durable state transitions around a business key.
+---
+
+A Process is a durable state machine with one instance per key.
+
+```python
+from dataclasses import dataclass
+from highwater import process
+
+@dataclass(frozen=True)
+class Authorization:
+    account_id: str
+    authorization_id: str
+    amount: int
+
+@process.defn(key="account_id")
+@dataclass
+class Account:
+    available: int = 0
+
+    @process.event
+    async def authorize(self, event: Authorization):
+        if event.amount > self.available:
+            return {"approved": False}
+        self.available -= event.amount
+        return {"approved": True, "remaining": self.available}
+```
+
+Highwater guarantees one committed transition at a time for each `account_id`. Different accounts execute independently.
+
+## Keep transitions replay-safe
+
+Process state changes become visible only when the invocation commits. Code may run more than once after a timeout or host failure, so direct external effects must use a stable idempotency key. Prefer returning output from the handler; Highwater publishes committed output with a stable message identifier.
+
+## Timers and gates
+
+Use durable timers for processing-time delays. Use event-time gates when correctness depends on source progress:
+
+```python
+await process.wait_until(process.event_time >= close_at)
+```
+
+The Process suspends without holding execution capacity. Its state and wait condition remain durable.
+
+## Hot keys
+
+Ordering means one key cannot commit two conflicting transitions concurrently. Choose the narrowest key that preserves the invariant you need. Split a globally keyed Process only when the state can be partitioned safely.

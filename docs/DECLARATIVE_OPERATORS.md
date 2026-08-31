@@ -16,12 +16,12 @@ The operator contracts below were derived from the Apache Flink checkout at `~/f
    - Keeps the first record per key according to event time after the completeness frontier passes it. Later records are durably classified as suppressed duplicates. Keep-last requires retractions and remains future work.
    - Extract from Flink's row-time deduplication operators: event-time ordering, equal-timestamp behavior, update-before/update-after output, late records, and retention.
 4. `FilterSpec` — field predicate form implemented
-   - Evaluates a typed equality or numeric comparison for every accepted record and durably launches matching workflows without waiting for a watermark.
+   - Evaluates a typed equality or numeric comparison for every accepted record and durably dispatches matching Process events without waiting for a watermark.
 5. `KeyedProcessSpec`
    - Provides named keyed state, event-time timers, and side outputs as the foundational stateful escape hatch.
    - Extract from `KeyedProcessOperator`: timer namespaces, current-key isolation, recovery ordering, and deterministic timer callbacks. State schemas and handler upgrades must be explicit before this is exposed.
 6. `AsyncEnrichmentSpec`
-   - Runs bounded-concurrency activity-backed enrichment with ordered or unordered output, timeouts, and retries.
+   - Runs bounded-concurrency enrichment with ordered or unordered output, timeouts, and retries.
    - Extract from `AsyncWaitOperator`: checkpointed in-flight inputs, replay after recovery, capacity backpressure, timeout behavior, retry policy, and output ordering.
 7. `BroadcastStateSpec`
    - Applies a low-volume rule or configuration stream to every keyed data partition.
@@ -29,7 +29,7 @@ The operator contracts below were derived from the Apache Flink checkout at `~/f
 
 ## Intentionally excluded
 
-- General map, flat-map, and union graphs remain outside the API. `FilterSpec` is intentionally narrow because its matching workflow and output are durable resources.
+- General map, flat-map, and union graphs remain outside the API. `FilterSpec` is intentionally narrow because its matching Process and output are durable resources.
 - Regular unbounded stream joins require retractions and potentially unlimited state; interval and temporal joins cover the practical bounded cases first.
 - Processing-time temporal joins are nondeterministic under replay.
 - SQL, catalogs, and a general dataflow builder are outside the intended programming model.

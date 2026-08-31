@@ -1,0 +1,28 @@
+---
+title: Use cases
+description: Apply durable Processes to common streaming applications.
+---
+
+## Online recommendations
+
+Maintain user and item features as events arrive, join clicks against the dimension version valid at click time, and batch embedding calls by size or latency. Emit a recommendation update without rebuilding an entire table.
+
+## Device monitoring
+
+Track per-device state, use source watermarks to close event-time windows, and alert only when a condition has been complete long enough to be meaningful. Scheduled deployments can drain low-volume fleets periodically.
+
+## Risk and account state
+
+Apply deposits, authorizations, and reversals in per-account order. Deduplicate producer retries and emit downstream decisions from the same state transition.
+
+## Sessionization
+
+Use event-time timers to close sessions after inactivity while allowing an explicit lateness policy for delayed mobile events.
+
+## Enrichment
+
+Keep a versioned reference stream and perform temporal as-of joins: each fact observes the newest reference value whose effective time is not later than the fact.
+
+## Model inference
+
+Collect work until either the batch is efficient or the oldest event reaches its latency budget. This supports GPUs and vector APIs without turning a live stream into a periodic bulk job.

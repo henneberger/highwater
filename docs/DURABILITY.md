@@ -4,7 +4,7 @@ The durable source of truth is the immutable object WAL, not local RocksDB and n
 
 WAL records have an explicit format version and named outer fields. Format 2 stores puts, deletes, and range deletes in compact columns; recovery still reads format 1 records. An unknown format fails startup instead of guessing. This keeps the high-throughput representation evolvable without making durable state dependent on Rust struct field order.
 
-Process completion uses the same boundary. A worker leases several process activations and returns several results, and the owning lane commits their state, input progress, output changelog, outbox entries, and task acknowledgements in one WAL record. If the commit fails, none of those completions are acknowledged. General Temporal-style workflows continue to use the control-plane WAL lane because their commands may span workflow identities.
+Process completion uses the same boundary. An executor leases several Process activations and returns several results, and the owning lane commits their state, input progress, output changelog, outbox entries, and task acknowledgements in one WAL record. If the commit fails, none of those completions are acknowledged.
 
 Every per-key process state records:
 
@@ -31,7 +31,7 @@ Watermarks only describe event-time completeness. They are checkpointed with sta
 
 ## External effects
 
-Workflow and process outputs enter a transactional outbox in the same completion commit. Delivery is at least once with deterministic message IDs. A sink obtains effectively exactly-once application by enforcing uniqueness on that ID or by participating in a checkpoint-aware transaction. Calling a non-idempotent external service directly from a batch handler is outside this guarantee.
+Process outputs enter a transactional outbox in the same completion commit. Delivery is at least once with deterministic message IDs. A sink obtains effectively exactly-once application by enforcing uniqueness on that ID or by participating in a checkpoint-aware transaction. Calling a non-idempotent external service directly from a batch handler is outside this guarantee.
 
 ## Current trust boundary
 

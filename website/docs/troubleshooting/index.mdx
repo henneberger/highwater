@@ -1,0 +1,12 @@
+---
+title: Troubleshoot Highwater
+description: Diagnose lag, recovery, retries, and invocation fencing.
+---
+
+Start from the visible symptom:
+
+- [Backlog or watermark lag](/troubleshooting/backpressure)
+- [Deployment recovering or unavailable](/troubleshooting/recovery)
+- [Repeated invocation or fenced completion](/troubleshooting/invocation-leases)
+
+Use `highwater describe DEPLOYMENT` for version and health, `highwater backlogs DEPLOYMENT` for Process and watermark lag, and `highwater logs DEPLOYMENT` for application exceptions.

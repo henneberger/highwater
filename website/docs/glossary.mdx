@@ -1,0 +1,48 @@
+---
+title: Glossary
+description: Terms used by Highwater durable streaming.
+---
+
+## Checkpoint
+
+An immutable, consistently published snapshot that bounds recovery replay.
+
+## Commit dependency
+
+A durable ordering requirement carried by a cross-partition message.
+
+## Event time
+
+The time an event occurred in its source domain.
+
+## Fence
+
+A durable token or generation check that prevents stale execution from committing.
+
+## Gate
+
+A durable scheduling condition, such as a timer or event-time completeness threshold.
+
+## Invocation
+
+One retryable attempt to execute an eligible Process transition or batch.
+
+## Late event
+
+An event whose timestamp is behind the accepted watermark and lateness boundary.
+
+## Partition
+
+A movable group of Process keys sharing durable ownership and commit resources.
+
+## Process
+
+A keyed, durable state machine that consumes events and emits committed state and output.
+
+## Temporal join
+
+A fact-to-version join selecting the matching reference value valid at fact time.
+
+## Watermark
+
+A monotonic statement of expected event-time completeness for an input.

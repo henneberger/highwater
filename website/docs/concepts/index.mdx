@@ -1,0 +1,15 @@
+---
+title: Concepts
+description: The execution and streaming ideas behind Highwater.
+---
+
+Highwater combines durable function execution with incremental stream processing around one unit: the keyed Process.
+
+- [Durable Processes](/concepts/durable-processes) explains ordered transitions.
+- [Event time and watermarks](/concepts/event-time-and-watermarks) explains source progress.
+- [Temporal joins](/concepts/temporal-joins) explains versioned enrichment.
+- [Serverless execution](/concepts/serverless-execution) explains elastic placement and batching.
+- [Leases and fencing](/concepts/leases-and-fencing) explains safe ownership.
+- [Checkpoints and replay](/concepts/checkpoints) explains recovery.
+
+Application progress and event-time progress are related but distinct. A durable commit says a transition survived. A watermark says inputs are complete through an event timestamp.

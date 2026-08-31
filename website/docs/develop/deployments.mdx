@@ -1,0 +1,32 @@
+---
+title: Deployments
+description: Run continuously, on demand, or on a schedule.
+---
+
+Deploy the same file used locally:
+
+```bash
+highwater deploy app.py
+```
+
+Highwater packages dependencies, validates Process and operator definitions, creates a versioned release, provisions ingestion, and scales partitions independently.
+
+## Scheduled execution
+
+```bash
+highwater deploy app.py --schedule "0 * * * *"
+```
+
+Ingestion stays available and durable between runs. The schedule controls when compute drains eligible work. Size-or-latency batches flush before the scheduled run ends.
+
+## Configuration
+
+Application configuration and secrets are deployment settings:
+
+```bash
+highwater deploy app.py \
+  --env MODEL=embed-v3 \
+  --secret OPENAI_API_KEY
+```
+
+Infrastructure settings are intentionally absent from the normal command. Highwater chooses partitions, storage tiers, checkpoint cadence, and execution capacity from workload and service policy.

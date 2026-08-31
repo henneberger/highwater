@@ -37,7 +37,13 @@ pub(crate) fn recover_process_tasks(app: &AppState, _recover_orphans: bool) -> R
     }
     for (shard, leases) in expired_by_shard {
         app.commit_shard(shard, |transaction| {
-            for (lease_key, lease) in leases {
+            for (lease_key, _) in leases {
+                let Some(lease) = transaction.get::<ProcessBatchLease>(&lease_key)? else {
+                    continue;
+                };
+                if lease.lease_expires > now() {
+                    continue;
+                }
                 for ready_execution in lease.executions {
                     let execution = &ready_execution.execution;
                     transaction.put(

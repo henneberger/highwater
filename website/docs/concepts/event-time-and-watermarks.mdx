@@ -1,0 +1,30 @@
+---
+title: Event time and watermarks
+description: Separate when events happened from when they execute.
+---
+
+Event time comes from the source record. Processing time comes from the execution clock. They diverge whenever events are buffered, retried, delayed, or arrive out of order.
+
+A watermark `W` means an input does not expect another on-time event at or before `W`. Highwater combines progress across active input partitions conservatively.
+
+## Gates
+
+An event-time gate turns progress into an ordinary scheduling condition:
+
+```python
+await process.wait_until(process.event_time >= deadline)
+```
+
+The Process becomes runnable when the watermark reaches `deadline`. It consumes no execution capacity while waiting.
+
+## Idleness
+
+An empty partition would otherwise hold back the minimum watermark forever. Sources declare idleness after a configured observation period. A new event reactivates the partition before its timestamp can affect progress.
+
+## Late data
+
+Watermarks are promises, so late-data behavior must be explicit. Highwater can reject, side-output, or revise supported incremental results. Allowed lateness delays cleanup; it does not move an event's timestamp.
+
+## Correctness
+
+Watermarks are monotonic and recover with Process state. They do not acknowledge event persistence and cannot substitute for a durable log or fenced state transition.

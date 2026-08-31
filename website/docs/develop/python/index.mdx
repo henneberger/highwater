@@ -1,0 +1,18 @@
+---
+title: Python SDK
+description: Define durable streaming Processes in Python.
+---
+
+Install the SDK and local runtime together:
+
+```bash
+pip install highwater
+```
+
+The public API has three layers:
+
+- `@process.defn` and handler decorators define application behavior.
+- `Client` publishes events and reads Process state or output.
+- operator specifications declare optimized filters, windows, and joins.
+
+Start with [setup](/develop/python/setup) and [Processes](/develop/python/processes). Add [batching](/develop/python/batching), [event-time gates](/develop/python/event-time), or [operators](/develop/python/operators) only where the application needs them.

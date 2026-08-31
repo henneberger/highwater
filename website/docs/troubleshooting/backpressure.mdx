@@ -1,0 +1,25 @@
+---
+title: Backlog and backpressure
+description: Diagnose growing queue age, admission retries, and watermark lag.
+---
+
+## Identify the boundary
+
+Compare admission latency, oldest queued event, runnable events, active invocations, commit latency, output delivery lag, and watermark lag.
+
+- Rising admission latency means deployment capacity is saturated.
+- Rising runnable age with free capacity usually indicates application failures or a hot key.
+- Rising watermark lag with low queue age points to a stalled or incorrectly active source partition.
+- Rising output lag with stable state commits points to the destination.
+
+## Check key distribution
+
+A single hot key remains ordered and cannot consume arbitrary parallelism. Inspect the top keys by backlog age. Choose a finer safe key or move commutative work into an incremental aggregate.
+
+## Check application calls
+
+Slow model or service calls hold invocation capacity. Add timeouts, use size-or-latency batching, and ensure the downstream dependency can accept deployment concurrency.
+
+## Respond to admission retries
+
+Honor retry guidance and reuse the same event ID. Do not copy rejected events into an unbounded application queue; this moves the failure boundary without improving durability.

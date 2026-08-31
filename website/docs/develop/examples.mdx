@@ -1,0 +1,17 @@
+---
+title: Examples
+description: Explore complete streaming applications.
+---
+
+Each example runs with `highwater dev` and publishes through the normal ingestion API.
+
+| Example | Run | Demonstrates |
+| --- | --- | --- |
+| Account balances | `highwater dev examples/account_balance.py` | ordered keyed state and deduplication |
+| Clickstream recommendations | `highwater dev examples/clickstream_recommendation.py` | temporal enrichment, sessions, and recommendations |
+| Sensor metrics | `highwater dev examples/iot_sensor_metrics.py` | watermarks, late data, filters, and sliding aggregates |
+| Temporal join | `highwater dev examples/temporal_join.py` | fact-to-version as-of semantics and conditions |
+| Embeddings | `highwater dev examples/embeddings_batch.py` | size-or-latency vectorized inference |
+| Scheduled drain | `highwater dev examples/scheduled_batch.py` | durable ingestion with scheduled compute |
+
+Read each example as a normal Python application. The definitions do not contain partition loops, checkpoint callbacks, or transport offsets.

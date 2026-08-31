@@ -1,0 +1,27 @@
+---
+title: Highwater documentation
+slug: /
+description: Build durable streaming applications with Python.
+---
+
+import DocsLanding from '@site/src/components/DocsLanding';
+
+<DocsLanding>
+
+## Streaming applications, expressed as code
+
+Highwater runs stateful Python over unbounded event streams. Define a Process around a business key, send events, and let Highwater own ordering, durable state, event-time progress, retries, batching, and scaling.
+
+Start with the [quickstart](/quickstart), learn [how durable streaming works](/evaluate/durable-streaming), or browse the [Python SDK](/develop/python).
+
+### One programming model
+
+- **Processes** hold durable, keyed application state.
+- **Events** invoke ordered transitions.
+- **Gates** wait for event-time facts without exposing a dataflow graph.
+- **Operators** provide efficient windows, filters, and joins where declarative state is clearer.
+- **Batches** trade a bounded amount of latency for vectorized throughput.
+
+The same Process can consume continuously, drain on a schedule, or scale to zero between bursts.
+
+</DocsLanding>

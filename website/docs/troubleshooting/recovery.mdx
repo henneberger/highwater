@@ -1,0 +1,22 @@
+---
+title: Recovery
+description: Diagnose a deployment that is restoring or repeatedly failing.
+---
+
+`highwater describe DEPLOYMENT` reports the recovery phase: checkpoint selection, state restore, replay, ownership activation, or application readiness.
+
+## Replay is slow
+
+Check the amount of history after the latest checkpoint and whether one partition dominates it. Highwater can resume restored partitions independently, but a hot partition must replay its ordered state before accepting a new generation.
+
+## Application version cannot load
+
+The deployment retains the version pinned to durable activations. Restore the missing artifact or promote a compatible version with the required state migration. Do not force newer code to decode unknown state.
+
+## Ownership repeatedly changes
+
+Check host health, invocation duration, and renewal latency. A completion from an old generation is expected to be fenced after reassignment; repeated churn indicates the deployment cannot maintain its service objective.
+
+## Verify recovery
+
+Confirm that accepted event IDs remain visible, committed state and output agree, watermark progress did not regress, and external duplicates retain the same message IDs.

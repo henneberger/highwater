@@ -92,16 +92,6 @@ impl Transaction<'_> {
         self.store.get(key)
     }
 
-    pub(crate) fn contains_key(&self, key: &str) -> Result<bool> {
-        if self.encoded_changes.contains_key(key) {
-            return Ok(true);
-        }
-        if let Some(value) = self.changes.get(key) {
-            return Ok(value.is_some());
-        }
-        Ok(self.store.db.get_pinned(key.as_bytes())?.is_some())
-    }
-
     pub(crate) fn multi_get<T: DeserializeOwned>(&self, keys: &[String]) -> Result<Vec<Option<T>>> {
         let mut values: Vec<Option<T>> = (0..keys.len()).map(|_| None).collect();
         let mut missing = Vec::new();

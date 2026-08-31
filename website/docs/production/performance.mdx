@@ -1,0 +1,20 @@
+---
+title: Performance
+description: Tune application behavior while Highwater scales durable execution.
+---
+
+Highwater improves throughput by batching durable appends, pipelining independent partitions, keeping hot state close to compute, and vectorizing application calls when requested. These optimizations do not move the acknowledgement or completion boundary.
+
+The dominant application controls are:
+
+| Control | Improves | Cost |
+| --- | --- | --- |
+| narrower Process keys | parallelism | more cross-key coordination |
+| larger `max_size` | model or API throughput | memory and tail latency |
+| larger `max_delay` | batch fill | added low-load latency |
+| native operators | per-record overhead | less arbitrary handler logic |
+| scheduled drain | idle cost | delayed processing |
+
+Measure accepted events, committed transitions, output delivery, p50/p99 end-to-end latency, retry rate, watermark lag, and backlog age. Throughput without durable completion is not application throughput.
+
+One key remains serial when transitions do not commute. More capacity helps independent keys, not a single globally ordered state machine.

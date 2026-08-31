@@ -1,0 +1,46 @@
+---
+title: CLI
+sidebar_label: CLI
+description: Install, develop, deploy, inspect, and manage Highwater applications.
+---
+
+## Develop
+
+```bash
+highwater dev APP
+```
+
+Starts a complete local environment, discovers definitions, watches source files, and prints local ingestion details.
+
+| Option | Meaning |
+| --- | --- |
+| `--port PORT` | override the local HTTP port |
+| `--no-reload` | disable source watching |
+
+Infrastructure tuning is not required.
+
+## Deploy
+
+```bash
+highwater deploy APP [--schedule CRON]
+```
+
+Creates an immutable application version and promotes it after validation.
+
+| Option | Meaning |
+| --- | --- |
+| `--schedule CRON` | run compute during scheduled drain windows |
+| `--env NAME=VALUE` | set application configuration |
+| `--secret NAME` | bind a managed secret |
+| `--name NAME` | override the deployment name |
+
+## Inspect
+
+```bash
+highwater deployments
+highwater describe DEPLOYMENT
+highwater logs DEPLOYMENT
+highwater backlogs DEPLOYMENT
+```
+
+These commands expose application versions, Process lag, watermark lag, retries, and output delivery without exposing internal hosts or storage paths.

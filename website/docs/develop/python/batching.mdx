@@ -1,0 +1,33 @@
+---
+title: Size-or-latency batching
+description: Vectorize expensive work without waiting indefinitely for a full batch.
+---
+
+Batching is an execution policy for a live Process, not a separate batch system.
+
+```python
+from highwater import process
+
+@process.defn(key="model")
+class Embeddings:
+    @process.batch(max_size=128, max_delay=0.025)
+    async def embed(self, documents: list[Document]):
+        vectors = await model.embed([doc.text for doc in documents])
+        return [
+            Embedding(document_id=doc.document_id, vector=vector)
+            for doc, vector in zip(documents, vectors, strict=True)
+        ]
+```
+
+Highwater dispatches when either:
+
+- the batch reaches `max_size`; or
+- the oldest eligible event waits `max_delay` seconds.
+
+This keeps throughput high under load and bounds added latency when traffic is light. A scheduled deployment uses the same rule while draining a finite backlog.
+
+## Ordering and failure
+
+Batching never permits two conflicting commits for one key. A failed invocation retries the same durable inputs. Results commit as one fenced transition; a response from a revoked invocation is ignored.
+
+Choose a maximum size the downstream model or service handles comfortably. Set the delay from the end-to-end latency budget, not from the desired average batch size.

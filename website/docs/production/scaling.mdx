@@ -1,0 +1,25 @@
+---
+title: Scaling and backpressure
+description: Scale independent keys while keeping admission bounded.
+---
+
+Highwater groups Process keys into movable partitions. A partition has one durable ownership generation at a time. The platform moves partitions and restores their state without changing Process IDs or ingestion endpoints.
+
+## Scale out
+
+Independent partitions run concurrently across hosts. Hot state remains close to execution, while cold state can move to lower-cost storage and load on demand.
+
+## Backpressure
+
+Capacity is communicated from execution through partition admission to producers. Highwater delays or rejects admission before a hidden queue grows without bound. SDKs retry with jitter; scheduled deployments retain already accepted input while compute is inactive.
+
+## Hot keys
+
+One non-commutative key is sequential by design. Resolve a hot key by:
+
+- selecting a finer key while preserving the invariant;
+- using an incremental commutative aggregate;
+- splitting independent state into child Processes and joining their output;
+- moving expensive vector work into a size-or-latency batch.
+
+At 10x load, Highwater first uses available concurrency, then adds partition owners, then applies ingestion backpressure. It does not weaken fencing, skip durable commits, or advance watermarks to hide lag.

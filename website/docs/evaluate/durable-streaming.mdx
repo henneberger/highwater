@@ -1,0 +1,25 @@
+---
+title: Why durable streaming
+description: Understand the contract between accepted events and committed state.
+---
+
+A normal function loses its stack and local variables when its process stops. A normal queue can redeliver a message, but it does not reconstruct application state or determine whether output committed.
+
+Highwater makes the transition itself durable:
+
+```text
+accepted event + prior state
+            │
+            ▼
+      retryable invocation
+            │
+            ▼
+new state + output + next event
+        one fenced commit
+```
+
+For each key, Highwater records event admission, orders the mailbox, invokes application code, and commits state and output together. An invocation may repeat after a failure, but a stale or duplicate completion cannot commit.
+
+Event-time progress is durable too. Watermarks, idleness decisions, timers, join versions, and late-event decisions survive restart. A watermark is not the durability mechanism; it is one piece of application state protected by that mechanism.
+
+This model gives Python the flexibility people value in durable jobs without requiring a topology builder for every decision. Native operators remain available for common incremental algorithms where a fixed implementation is faster and easier to reason about.

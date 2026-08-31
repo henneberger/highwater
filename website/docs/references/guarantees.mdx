@@ -1,0 +1,32 @@
+---
+title: Guarantees
+description: Exact delivery, ordering, recovery, and event-time guarantees.
+---
+
+import GuaranteeTable from '@site/src/components/GuaranteeTable';
+
+<GuaranteeTable />
+
+## Ordering
+
+Events for one Process key commit in mailbox order unless an explicit event-time gate defines a later eligibility order. Independent keys have no global order.
+
+## Deduplication
+
+A stable event ID deduplicates uncertain ingestion retries. Reusing an ID with different content fails. Deduplication does not make a direct external side effect idempotent.
+
+## Invocation
+
+Application code executes at least once across failures. A token and partition generation fence each completion, so no more than one attempt commits a particular transition.
+
+## Output
+
+State and Highwater output commit atomically. Delivery to an external destination is at least once with a stable message ID.
+
+## Event time
+
+Source progress is monotonic per partition. A deployment watermark never passes an active partition's reported progress. Declared idleness removes an inactive partition until it produces again.
+
+## Availability
+
+Partition ownership can move after a failure. Recovery restores the last published checkpoint and every later committed transition before the new generation can commit application results.

@@ -1,0 +1,22 @@
+---
+title: Repeated invocations
+description: Diagnose retries, renewal failures, and fenced completions.
+---
+
+An invocation can run more than once when its executor becomes unreachable or its ownership is revoked. Only one attempt may commit.
+
+## Application calls exceed their deadline
+
+Add explicit timeouts around external calls. Long valid invocations renew automatically, but a dependency that never returns delays useful work and increases retry risk.
+
+## A completion was fenced
+
+Fencing means a durable revocation or partition generation change committed before the response. The response is ignored. This is a safety mechanism, not evidence that state applied twice.
+
+## Side effects repeated
+
+Direct external calls happen before Highwater's commit decision and may repeat. Emit transactional output or pass `process.event_id()` as the destination idempotency key.
+
+## A new deployment is active
+
+In-flight work remains pinned to its compatible version. Highwater drains it before retiring that version. State migrations run only at a fenced transition boundary.

@@ -1,0 +1,72 @@
+---
+title: Quickstart
+description: Install Highwater, run a local streaming application, and publish events.
+---
+
+## Install
+
+```bash
+pip install highwater
+```
+
+Create `app.py`:
+
+```python
+from dataclasses import dataclass
+from highwater import process
+
+@dataclass(frozen=True)
+class Deposit:
+    account_id: str
+    amount: int
+
+@process.defn(key="account_id")
+@dataclass
+class Balance:
+    total: int = 0
+
+    @process.event
+    async def apply(self, event: Deposit):
+        self.total += event.amount
+        return {"account_id": event.account_id, "balance": self.total}
+```
+
+## Start locally
+
+```bash
+highwater dev app.py
+```
+
+That command discovers the Processes in `app.py`, starts a complete local environment, and prints an ingestion endpoint. Development defaults cover storage, execution capacity, and recovery.
+
+## Publish an event
+
+```python
+from highwater import Client
+from app import Deposit
+
+client = Client()
+balances = client.process("Balance")
+
+await balances.send(
+    Deposit(account_id="account-a", amount=5),
+    event_id="deposit-1001",
+)
+```
+
+Use a stable `event_id` whenever a producer may retry. The call returns after Highwater durably accepts the event, not after the Process finishes.
+
+Read the materialized state:
+
+```python
+state = await balances.state("account-a")
+print(state.total)
+```
+
+## Deploy
+
+```bash
+highwater deploy app.py
+```
+
+Highwater creates a versioned deployment and managed ingestion endpoint. Continue with [Processes](/develop/python/processes), [event ingestion](/develop/python/ingestion), and [deployment safety](/develop/python/upgrades).

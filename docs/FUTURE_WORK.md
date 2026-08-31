@@ -5,10 +5,10 @@ Durability and distribution now take precedence over adding operators. Keep this
 1. Replace the filesystem WAL adapter with object-store conditional writes, a CAS manifest, leader epochs, and fencing.
 2. Upload only changed RocksDB checkpoint files; full checkpoints already bound WAL replay.
 3. Move fenced key-group leases from the control process into remote shard executors.
-4. Move worker transport from HTTP/JSON to the versioned Protobuf protocol with long polling or streaming RPC.
-5. Extend the existing process build pinning and migrations to workflow and activity replay compatibility.
-6. Complete cancellation, heartbeat, lease-renewal, retry, and timeout edge cases.
-7. Add sticky workflow caches and batched durable commits.
+4. Move invocation transport from HTTP/JSON to the versioned Protobuf protocol with long polling or streaming RPC.
+5. Complete Process build pinning and migration compatibility across rolling deployments.
+6. Add runtime-controlled Process invocation renewal. Bind every grant, renewal, and completion to the durable shard-owner epoch so reassignment fences all delayed work; lease expiry alone must only make a grant eligible for transactional revocation.
+7. Add sticky Process caches and batched durable commits.
 8. Materialize large Arrow IPC payloads in object storage and keep references in history.
 9. Expand failover, nondeterminism, observability, and history-inspection coverage.
 
@@ -16,7 +16,7 @@ Do not add more language SDKs or a cluster control plane until the first four it
 
 ## Streaming operator follow-ups
 
-The fixed-window, temporal-join, bounded interval-join, and event-time keep-first deduplication operators now have durable state, deterministic workflow outputs, and idempotent deployment. The remaining work is:
+The fixed-window, temporal-join, bounded interval-join, and event-time keep-first deduplication operators now have durable state, deterministic Process outputs, and idempotent deployment. The remaining work is:
 
 1. Move keyed operator execution to remote owners; keys and input writes already carry fenced key-group epochs.
 2. Replace the filesystem object adapter with conditional object-store writes and incremental checkpoint upload; full RocksDB checkpoints and an atomic manifest are implemented.

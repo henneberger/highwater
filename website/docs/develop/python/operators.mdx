@@ -1,0 +1,58 @@
+---
+title: Streaming operators
+description: Use declarative specifications for common incremental state machines.
+---
+
+Processes remain the primary programming model. Operator specs are useful when an algorithm has a standard incremental implementation and should not cross into Python for every record.
+
+## Filter
+
+```python
+from highwater import FilterSpec
+
+high_temperature = FilterSpec(
+    operator_id="high-temperature",
+    predicate="temperature > 80",
+    handler="HighTemperature",
+)
+```
+
+## Window
+
+```python
+from highwater import WindowAggregateSpec
+
+hourly = WindowAggregateSpec(
+    operator_id="hourly-device-temperature",
+    key="device_id",
+    event_time="observed_at",
+    window="1h",
+    aggregate={"count": "*", "max": "temperature"},
+    handler="HourlyDeviceTemperature",
+)
+```
+
+Windows update incrementally. Finalization follows the input watermark and late-data policy.
+
+## Temporal join
+
+```python
+from highwater import TemporalJoinSpec
+
+enriched_clicks = TemporalJoinSpec(
+    operator_id="enriched-clicks",
+    facts="clicks",
+    versions="product_versions",
+    key={"clicks.product_id": "product_versions.product_id"},
+    fact_time="clicked_at",
+    valid_from="effective_at",
+    where="clicks.region == product_versions.region",
+    handler="EnrichedClick",
+)
+```
+
+Each click joins immediately against the newest product version valid at `clicked_at`. The operator does not wait for a full window. Version corrections produce deterministic retractions and replacements when they affect previously emitted facts.
+
+## Interval join
+
+Use `IntervalJoinSpec` when both inputs are event streams and matching is bounded by a time interval. Unlike a temporal join, it retains unmatched events until watermarks pass the interval and lateness boundary.

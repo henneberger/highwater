@@ -1,0 +1,42 @@
+---
+title: Event ingestion
+description: Publish events through Highwater without managing a broker.
+---
+
+Every deployment receives managed SDK and HTTPS ingestion.
+
+```python
+from highwater import Client
+
+client = Client()
+orders = client.process("Order")
+
+receipt = await orders.send(
+    event,
+    event_id=event.order_event_id,
+)
+```
+
+The receipt means Highwater durably accepted the event. Execution may happen immediately, after an event-time gate, or during the next scheduled drain.
+
+## Idempotency
+
+Use an identifier stable across retries. Reusing an identifier for the same event is safe; reusing it for different content is rejected.
+
+## HTTPS
+
+```bash
+curl -X POST "$HIGHWATER_ENDPOINT/v1/processes/Order/events" \
+  -H "authorization: Bearer $HIGHWATER_TOKEN" \
+  -H "content-type: application/json" \
+  -H "idempotency-key: order-42-created" \
+  -d '{"order_id":"42","type":"created"}'
+```
+
+## Backpressure
+
+Admission has bounded capacity. When a deployment cannot safely accept more work, the API returns a retryable response with guidance rather than acknowledging into an unbounded hidden queue. SDK retries use jitter and preserve the same event identifier.
+
+## Source progress
+
+Sources that participate in event time publish progress through the same ingestion session. Highwater derives safe watermarks across active partitions and handles declared idleness without exposing transport-specific offsets.

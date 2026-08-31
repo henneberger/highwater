@@ -1,0 +1,25 @@
+---
+title: Durability
+description: Learn when events, state, output, and progress become durable.
+---
+
+An ingestion response is successful only after the event and its identity are durably recorded. Processing then follows four boundaries:
+
+1. The event enters a keyed durable inbox.
+2. The current partition generation grants an invocation capability.
+3. Application code produces new state and output.
+4. A fenced commit atomically records state, output, progress, and the next mailbox decision.
+
+If execution fails before commit, Highwater retries from the durable input and prior state. If the original completion arrives after ownership changed, fencing rejects it.
+
+## Checkpoints
+
+Asynchronous checkpoints compact committed state and bound replay time. They do not define whether an individual event is safe: acknowledged events after the latest checkpoint remain in the durable log and replay during recovery.
+
+## External effects
+
+Highwater can make its own state and output atomic. It cannot atomically control an arbitrary external API. Use Highwater output delivery or pass its stable message identifier as the destination's idempotency key.
+
+## Event time
+
+Watermarks, timers, and join progress are stored with application state. They recover consistently, but a watermark by itself is never used as proof that an event or transition was persisted.

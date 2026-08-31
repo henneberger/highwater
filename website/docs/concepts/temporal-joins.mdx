@@ -1,0 +1,31 @@
+---
+title: Temporal joins
+description: Enrich facts using the version that was valid at fact time.
+---
+
+A temporal join combines a fact stream with versioned reference state.
+
+For fact `f` at event time `t`, Highwater selects the matching version `v` with the greatest `v.valid_from <= t`. Optional conditions are evaluated against that version.
+
+```text
+product versions:  $10 at 09:00 ───── $12 at 11:00
+click:                            10:30
+result:                           price = $10
+```
+
+This differs from a stream-to-stream interval join:
+
+| Temporal join | Interval join |
+| --- | --- |
+| fact plus versioned table | two peer event streams |
+| point-in-time lookup | bounded time-range match |
+| can emit as soon as the applicable version is known | waits to determine unmatched results |
+| retains version history by validity | retains events through interval and lateness |
+
+## Progress and corrections
+
+When version input progress proves no earlier version can arrive, a fact result can finalize. Before finalization, a backfilled version may retract and replace an earlier result. The fact, selected version, emitted result, and indexes are all durable state.
+
+## Conditions
+
+Conditions refine the equi-key match, such as region equality, validity flags, or a numeric threshold. They do not change as-of version selection: Highwater first establishes the eligible version timeline, then applies the declared condition consistently.

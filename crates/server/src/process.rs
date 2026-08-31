@@ -1198,7 +1198,13 @@ pub(crate) async fn complete_process_batch(
     }
     let data_shards = app.shard_locks.len().saturating_sub(1).max(1);
     app.commit_shard(shard, |transaction| {
-        if !transaction.contains_key(&lease_key)? {
+        let current_lease = transaction
+            .get::<ProcessBatchLease>(&lease_key)?
+            .ok_or_else(|| anyhow!("process task lease lost"))?;
+        if current_lease.shard as usize != shard
+            || current_lease.process_id != process_id
+            || current_lease.executions.len() != completion.items.len()
+        {
             bail!("process task lease lost");
         }
         let process = transaction
@@ -1208,7 +1214,7 @@ pub(crate) async fn complete_process_batch(
         let mut shard_state = transaction
             .get::<ProcessShardState>(&state_key)?
             .unwrap_or_default();
-        for (leased, item) in lease.executions.iter().zip(completion.items) {
+        for (leased, item) in current_lease.executions.iter().zip(completion.items) {
             let execution_key = &leased.execution_key;
             let mut execution = leased.execution.clone();
             if execution.shard as usize != shard {

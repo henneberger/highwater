@@ -17,12 +17,12 @@ export default function DocsLanding({ children }) {
             <Link className="button button--secondary button--lg" to="/evaluate/durable-streaming">Why Highwater</Link>
           </div>
         </div>
-        <pre className={styles.code} aria-label="Durable process example"><code>{`@process.defn(key="account_id")
+        <pre className={styles.code} aria-label="Durable process example"><code>{`@streaming.process(key="account_id")
 @dataclass
 class Balance:
     total: int = 0
 
-    @process.event
+    @streaming.event
     async def apply(self, event: Deposit):
         self.total += event.amount`}</code></pre>
       </section>

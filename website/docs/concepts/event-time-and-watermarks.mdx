@@ -12,7 +12,7 @@ A watermark `W` means an input does not expect another on-time event at or befor
 An event-time gate turns progress into an ordinary scheduling condition:
 
 ```python
-await process.wait_until(process.event_time >= deadline)
+await streaming.wait_until(streaming.event_time >= deadline)
 ```
 
 The Process becomes runnable when the watermark reaches `deadline`. It consumes no execution capacity while waiting.

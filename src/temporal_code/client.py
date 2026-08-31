@@ -647,7 +647,7 @@ class Client:
     ) -> ProcessHandle:
         name = getattr(definition, "__temporal_code_process__", None)
         if name is None:
-            raise TypeError(f"{definition.__name__} is missing @process.defn")
+            raise TypeError(f"{definition.__name__} is missing @streaming.process")
         selected = options or ProcessOptions(
             key=getattr(definition, "__temporal_code_process_key__"),
             event_time_gate=getattr(definition, "__temporal_code_process_gate__"),
@@ -697,7 +697,7 @@ class Client:
             raise NotImplementedError("external stream connectors are not implemented")
         name = getattr(definition, "__temporal_code_process__", None)
         if name is None:
-            raise TypeError(f"{definition.__name__} is missing @process.defn")
+            raise TypeError(f"{definition.__name__} is missing @streaming.process")
         identifier = process_id or name
         input_stream = source or f"{identifier}-input"
         owns_input = source is None

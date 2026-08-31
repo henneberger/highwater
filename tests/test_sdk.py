@@ -3,6 +3,8 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+import temporal_code
+
 from temporal_code import (
     Client,
     Comparison,
@@ -23,12 +25,19 @@ from temporal_code import (
     execute_activity,
     wait_for_watermark,
     workflow,
-    process,
+    streaming,
 )
 from temporal_code.workflow_runner import WorkflowRunner
 
 
 class SdkTest(unittest.TestCase):
+    def test_streaming_annotations_do_not_expose_temporal_style_defn(self):
+        self.assertTrue(callable(streaming.process))
+        self.assertTrue(callable(streaming.event))
+        self.assertTrue(callable(streaming.batch))
+        self.assertFalse(hasattr(streaming, "defn"))
+        self.assertFalse(hasattr(temporal_code, "process"))
+
     def test_stream_writer_resumes_cursor_and_claims_fenced_epoch(self):
         class RecordingClient(Client):
             def __init__(self):
@@ -221,13 +230,13 @@ class SdkTest(unittest.TestCase):
             account_id: str
             amount: int
 
-        @process.defn
+        @streaming.process
         class Account:
-            @process.event
+            @streaming.event
             async def apply(self, event: Deposit, ctx: ProcessContext[dict]):
                 state = ctx.state_or({"balance": 0})
                 next_state = {"balance": state["balance"] + event.amount}
-                return process.transition(state=next_state, emit=next_state)
+                return streaming.transition(state=next_state, emit=next_state)
 
         registry = Registry()
         registry.register_workflow(Account)
@@ -254,10 +263,10 @@ class SdkTest(unittest.TestCase):
         })
 
     def test_stateful_process_migrates_and_emits(self):
-        @process.defn(
+        @streaming.process(
             key="account_id",
             event_time="occurred_at",
-            wait_until=process.complete,
+            wait_until=streaming.complete,
             state_version=2,
             build_id="accounts-v2",
         )
@@ -266,11 +275,11 @@ class SdkTest(unittest.TestCase):
             balance: int = 0
             currency: str = "USD"
 
-            @process.migrate(from_version=1)
+            @streaming.migrate(from_version=1)
             def migrate_v1(self, state):
                 return {**state, "currency": "USD"}
 
-            @process.event
+            @streaming.event
             async def apply(self, event):
                 self.balance += event["amount"]
                 return {"balance": self.balance, "currency": self.currency}
@@ -307,9 +316,9 @@ class SdkTest(unittest.TestCase):
             document_id: str
             text: str
 
-        @process.defn(key="document_id", build_id="embeddings-v1")
+        @streaming.process(key="document_id", build_id="embeddings-v1")
         class Embeddings:
-            @process.batch(max_size=32, max_delay=0.02)
+            @streaming.batch(max_size=32, max_delay=0.02)
             async def embed(self, documents: list[Document]):
                 return [
                     {"document_id": document.document_id, "embedding": [len(document.text)]}
@@ -340,11 +349,11 @@ class SdkTest(unittest.TestCase):
         self.assertEqual(Embeddings.__temporal_code_batch_max_delay__, 0.02)
 
     def test_process_handle_extracts_key_and_hides_stream_publish(self):
-        @process.defn
+        @streaming.process
         class Account:
-            @process.event
+            @streaming.event
             async def apply(self, event, ctx):
-                return process.transition(state=event)
+                return streaming.transition(state=event)
 
         class RecordingClient(Client):
             def __init__(self):

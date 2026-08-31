@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import dataclass
 
-from temporal_code import Client, process
+from temporal_code import Client, streaming
 
 
 @dataclass(frozen=True)
@@ -16,10 +16,10 @@ class AccountEvent:
     occurred_at: float
 
 
-@process.defn(
+@streaming.process(
     key="account_id",
     event_time="occurred_at",
-    wait_until=process.complete,
+    wait_until=streaming.complete,
     state_version=1,
 )
 @dataclass
@@ -28,7 +28,7 @@ class AccountBalanceProcess:
     events: int = 0
     complete_through: float = 0
 
-    @process.event
+    @streaming.event
     async def apply(self, event: AccountEvent):
         self.balance += event.amount
         self.events += 1

@@ -8,16 +8,16 @@ Event time says when an event happened in its source domain. Processing time say
 Declare the timestamp field:
 
 ```python
-@process.defn(
+@streaming.process(
     key="device_id",
     event_time="observed_at",
-    wait_until=process.complete,
+    wait_until=streaming.complete,
 )
 class DeviceMetrics:
     ...
 ```
 
-`process.complete` is an event-time gate. An event becomes eligible only when Highwater's watermark proves the input complete through that event's timestamp.
+`streaming.complete` is an event-time gate. An event becomes eligible only when Highwater's watermark proves the input complete through that event's timestamp.
 
 ## Watermarks
 

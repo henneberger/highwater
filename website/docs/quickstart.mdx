@@ -13,19 +13,19 @@ Create `app.py`:
 
 ```python
 from dataclasses import dataclass
-from highwater import process
+from highwater import streaming
 
 @dataclass(frozen=True)
 class Deposit:
     account_id: str
     amount: int
 
-@process.defn(key="account_id")
+@streaming.process(key="account_id")
 @dataclass
 class Balance:
     total: int = 0
 
-    @process.event
+    @streaming.event
     async def apply(self, event: Deposit):
         self.total += event.amount
         return {"account_id": event.account_id, "balance": self.total}

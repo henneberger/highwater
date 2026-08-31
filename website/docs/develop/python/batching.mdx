@@ -6,11 +6,11 @@ description: Vectorize expensive work without waiting indefinitely for a full ba
 Batching is an execution policy for a live Process, not a separate batch system.
 
 ```python
-from highwater import process
+from highwater import streaming
 
-@process.defn(key="model")
+@streaming.process(key="model")
 class Embeddings:
-    @process.batch(max_size=128, max_delay=0.025)
+    @streaming.batch(max_size=128, max_delay=0.025)
     async def embed(self, documents: list[Document]):
         vectors = await model.embed([doc.text for doc in documents])
         return [

@@ -6,19 +6,19 @@ Highwater lets you write stateful stream processing as ordinary Python. It keeps
 
 ```python
 from dataclasses import dataclass
-from highwater import process
+from highwater import streaming
 
 @dataclass(frozen=True)
 class Deposit:
     account_id: str
     amount: int
 
-@process.defn(key="account_id")
+@streaming.process(key="account_id")
 @dataclass
 class Balance:
     total: int = 0
 
-    @process.event
+    @streaming.event
     async def apply(self, event: Deposit):
         self.total += event.amount
         return {"account_id": event.account_id, "balance": self.total}
@@ -98,9 +98,9 @@ events ──► durable inbox ──► Python Process ──► state + output
 Highwater continuously batches transport and durable commits. Application code stays event-oriented unless it opts into vectorized execution:
 
 ```python
-@process.defn(key="document_id")
+@streaming.process(key="document_id")
 class Embeddings:
-    @process.batch(max_size=128, max_delay=0.025)
+    @streaming.batch(max_size=128, max_delay=0.025)
     async def embed(self, documents: list[Document]):
         vectors = await model.embed([doc.text for doc in documents])
         return [
@@ -114,17 +114,17 @@ The batch runs when it reaches 128 documents or its oldest document waits 25 mil
 ## Event time without a dataflow language
 
 ```python
-@process.defn(
+@streaming.process(
     key="account_id",
     event_time="occurred_at",
-    wait_until=process.complete,
+    wait_until=streaming.complete,
 )
 @dataclass
 class DailyBalance:
     total: int = 0
 ```
 
-`process.complete` runs an event only after Highwater knows the input is complete through that timestamp. The platform owns source progress, idleness, late-data policy, and watermark coordination.
+`streaming.complete` runs an event only after Highwater knows the input is complete through that timestamp. The platform owns source progress, idleness, late-data policy, and watermark coordination.
 
 Highwater also provides native incremental filters, windows, deduplication, interval joins, and temporal as-of joins. Use them for common state machines and keep application-specific decisions in Python.
 

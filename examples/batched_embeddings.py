@@ -7,7 +7,7 @@ import json
 import uuid
 from dataclasses import dataclass
 
-from temporal_code import Client, process
+from temporal_code import Client, streaming
 
 
 @dataclass(frozen=True)
@@ -21,9 +21,9 @@ def local_embedding(text: str, dimensions: int = 8) -> list[float]:
     return [round((value - 127.5) / 127.5, 6) for value in digest[:dimensions]]
 
 
-@process.defn(key="document_id", build_id="batched-embeddings-v1")
+@streaming.process(key="document_id", build_id="batched-embeddings-v1")
 class BatchedEmbeddings:
-    @process.batch(max_size=128, max_delay=0.025)
+    @streaming.batch(max_size=128, max_delay=0.025)
     async def embed(self, documents: list[Document]):
         batch_size = len(documents)
         return [

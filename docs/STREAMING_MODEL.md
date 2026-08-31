@@ -26,7 +26,7 @@ Filters preserve the input row kind and signed difference. Interval joins mainta
 
 ## Durable keyed processes
 
-`@process.defn` and `@process.event` are the application-facing streaming API. The typed handler receives the event plus `ProcessContext`, and returns `process.transition(state=..., emit=...)`. State remains private and durable; the optional emitted value produces `insert` followed by `update_before`/`update_after` changes, so a Process can feed another Process or native operator. `ProcessHandle` provides `send`, `state`, `complete_through`, and `drain`. `ProcessSpec` and the raw context envelope remain compatibility and expert APIs.
+`@streaming.process` and `@streaming.event` are the application-facing streaming API. The typed handler receives the event plus `ProcessContext`, and returns `streaming.transition(state=..., emit=...)`. State remains private and durable; the optional emitted value produces `insert` followed by `update_before`/`update_after` changes, so a Process can feed another Process or native operator. `ProcessHandle` provides `send`, `state`, `complete_through`, and `drain`. `ProcessSpec` and the raw context envelope remain compatibility and expert APIs.
 
 `EventTimeGate.IMMEDIATE` dispatches as soon as capacity permits. `EventTimeGate.COMPLETE` dispatches only after the input completeness frontier passes the event timestamp, providing an understandable “run when this event time is final” gate without exposing watermark arithmetic. Sealing bounded input releases all remaining events. Source-managed connectors should continue emitting watermarks even while data admission is backpressured, because progress messages are intentionally not subject to mailbox capacity.
 

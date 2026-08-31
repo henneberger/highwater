@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from temporal_code import Client, ProcessOptions, process
+from temporal_code import Client, ProcessOptions, streaming
 
 
 @dataclass(frozen=True)
@@ -16,22 +16,22 @@ class CounterEvent:
     amount: int
 
 
-@process.defn(key="key", build_id="process-throughput-v1")
+@streaming.process(key="key", build_id="process-throughput-v1")
 @dataclass
 class CounterProcess:
     total: int = 0
 
-    @process.event
+    @streaming.event
     async def apply(self, event: CounterEvent):
         self.total += event.amount
 
 
-@process.defn(key="key", build_id="process-throughput-batch-v1")
+@streaming.process(key="key", build_id="process-throughput-batch-v1")
 class BatchedCounterProcess:
-    @process.batch(max_size=1_024, max_delay=0.002)
+    @streaming.batch(max_size=1_024, max_delay=0.002)
     async def apply(self, events: list[CounterEvent], contexts):
         return [
-            process.transition(
+            streaming.transition(
                 state={"total": (context.state or {}).get("total", 0) + event.amount},
             )
             for event, context in zip(events, contexts, strict=True)

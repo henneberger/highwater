@@ -10,7 +10,7 @@ Every deployment is immutable and versioned. Highwater records which code versio
 Additive handlers and optional state fields with defaults can usually roll forward directly:
 
 ```python
-@process.defn(key="account_id", state_version=2)
+@streaming.process(key="account_id", state_version=2)
 @dataclass
 class Balance:
     total: int = 0

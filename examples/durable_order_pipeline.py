@@ -20,7 +20,7 @@ from temporal_code import (
     activity,
     current_activity,
     execute_activity,
-    process,
+    streaming,
     workflow,
 )
 
@@ -37,14 +37,14 @@ class OrderEvent:
     address: str | None = None
 
 
-@process.defn(key="order_id", event_time="occurred_at", build_id="order-intake-v1")
+@streaming.process(key="order_id", event_time="occurred_at", build_id="order-intake-v1")
 @dataclass
 class OrderIntake:
     lines: list[dict] = field(default_factory=list)
     total: int = 0
     submitted: bool = False
 
-    @process.event
+    @streaming.event
     async def apply(self, event: OrderEvent):
         if event.kind == "add_item":
             if event.sku is None or event.quantity <= 0 or event.unit_price <= 0:

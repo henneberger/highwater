@@ -31,19 +31,19 @@ orders = client.process("Order")
 
 | Decorator | Purpose |
 | --- | --- |
-| `@process.defn(...)` | defines keying, state version, and event-time policy |
-| `@process.event` | handles one eligible event |
-| `@process.batch(...)` | handles a size-or-latency batch |
-| `@Process.migrate(from_version=N)` | migrates durable state |
+| `@streaming.process(...)` | defines keying, state version, and event-time policy |
+| `@streaming.event` | handles one eligible event |
+| `@streaming.batch(...)` | handles a size-or-latency batch |
+| `@streaming.migrate(from_version=N)` | migrates durable state |
 
 ## Runtime
 
 | Call | Purpose |
 | --- | --- |
-| `process.key()` | current Process key |
-| `process.event_id()` | stable input identity |
-| `process.emit(event)` | emits transactional output |
-| `process.send(target, event)` | sends transactionally to another Process |
-| `process.wait_until(condition)` | suspends on a durable timer or event-time gate |
+| `streaming.key()` | current Process key |
+| `streaming.event_id()` | stable input identity |
+| `streaming.emit(event)` | emits transactional output |
+| `streaming.send(target, event)` | sends transactionally to another Process |
+| `streaming.wait_until(condition)` | suspends on a durable timer or event-time gate |
 
 Runtime calls are valid only inside a Process handler.

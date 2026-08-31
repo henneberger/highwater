@@ -52,15 +52,15 @@ class Transition(Generic[S, O]):
         }
 
 
-class _ProcessAnnotations:
+class _StreamingAnnotations:
     immediate = EventTimeGate.IMMEDIATE
     complete = EventTimeGate.COMPLETE
 
     @overload
-    def defn(self, cls: T) -> T: ...
+    def process(self, cls: T) -> T: ...
 
     @overload
-    def defn(
+    def process(
         self,
         *,
         name: str | None = None,
@@ -71,7 +71,7 @@ class _ProcessAnnotations:
         build_id: str | None = None,
     ) -> Any: ...
 
-    def defn(
+    def process(
         self,
         cls: T | None = None,
         *,
@@ -99,7 +99,7 @@ class _ProcessAnnotations:
             ]
             if len(event_handlers) + len(batch_handlers) != 1:
                 raise TypeError(
-                    f"{target.__name__} must have exactly one @process.event or @process.batch method"
+                    f"{target.__name__} must have exactly one @streaming.event or @streaming.batch method"
                 )
             handler_name, handler = (event_handlers or batch_handlers)[0]
             is_batch = bool(batch_handlers)
@@ -181,7 +181,9 @@ class _ProcessAnnotations:
                 bound_handler = getattr(coordinator, handler_name)
                 parameters = len(inspect.signature(bound_handler).parameters)
                 if parameters not in {1, 2}:
-                    raise TypeError("@process.batch accepts events and optional ProcessContext list")
+                    raise TypeError(
+                        "@streaming.batch accepts events and optional ProcessContext list"
+                    )
                 results = (
                     bound_handler(events)
                     if parameters == 1
@@ -190,7 +192,7 @@ class _ProcessAnnotations:
                 if inspect.isawaitable(results):
                     results = await results
                 if not isinstance(results, list) or len(results) != len(envelopes):
-                    raise TypeError("@process.batch must return one result for each event")
+                    raise TypeError("@streaming.batch must return one result for each event")
                 transitions = []
                 for result, instance, context in zip(results, instances, contexts, strict=True):
                     if isinstance(result, Transition):
@@ -207,14 +209,18 @@ class _ProcessAnnotations:
                 bound_handler = getattr(instance, handler_name)
                 parameters = len(inspect.signature(bound_handler).parameters)
                 if parameters not in {1, 2}:
-                    raise TypeError("@process.event accepts event and optional ProcessContext")
+                    raise TypeError(
+                        "@streaming.event accepts event and optional ProcessContext"
+                    )
                 result = bound_handler(event) if parameters == 1 else bound_handler(event, context)
                 if inspect.isawaitable(result):
                     result = await result
                 if isinstance(result, Transition):
                     return result._wire()
                 if not is_dataclass(instance):
-                    raise TypeError("non-dataclass process handlers must return process.transition(...)")
+                    raise TypeError(
+                        "non-dataclass streaming handlers must return streaming.transition(...)"
+                    )
                 return Transition(state=asdict(instance), emit=result)._wire()
 
             setattr(run, "__temporal_code_kind__", "run")
@@ -272,4 +278,4 @@ class _ProcessAnnotations:
         return Transition(state=state, emit=emit)
 
 
-process = _ProcessAnnotations()
+streaming = _StreamingAnnotations()

@@ -89,12 +89,12 @@
               <div class="window-status"><span></span> Running</div>
             </div>
             <div class="code-panel">
-              <pre><code><span class="code-purple">@process.defn</span>(key=<span class="code-green">"account_id"</span>)
+              <pre><code><span class="code-purple">@streaming.process</span>(key=<span class="code-green">"account_id"</span>)
 <span class="code-purple">@dataclass</span>
 <span class="code-blue">class</span> <span class="code-yellow">Balance</span>:
     total: <span class="code-blue">int</span> = <span class="code-orange">0</span>
 
-    <span class="code-purple">@process.event</span>
+    <span class="code-purple">@streaming.event</span>
     <span class="code-blue">async def</span> <span class="code-yellow">apply</span>(self, event):
         self.total += event.amount
         <span class="code-blue">return</span> {
@@ -209,7 +209,7 @@
             </div>
             <div class="gate-code">
               <span class="gate-icon">⌁</span>
-              <code>await process.wait_until(<br>&nbsp;&nbsp;process.event_time &gt;= ship_at<br>)</code>
+              <code>await streaming.wait_until(<br>&nbsp;&nbsp;streaming.event_time &gt;= ship_at<br>)</code>
               <span class="gate-open">gate open</span>
             </div>
           </div>

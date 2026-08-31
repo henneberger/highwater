@@ -15,7 +15,7 @@ Fencing means a durable revocation or partition generation change committed befo
 
 ## Side effects repeated
 
-Direct external calls happen before Highwater's commit decision and may repeat. Emit transactional output or pass `process.event_id()` as the destination idempotency key.
+Direct external calls happen before Highwater's commit decision and may repeat. Emit transactional output or pass `streaming.event_id()` as the destination idempotency key.
 
 ## A new deployment is active
 

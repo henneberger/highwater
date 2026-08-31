@@ -1,6 +1,6 @@
 window.HIGHWATER_SITE = {
   docs: "https://github.com/henneberger/highwater/tree/main/website/docs",
-  earlyAccess: "mailto:hello@highwater.cloud?subject=Highwater%20early%20access",
+  earlyAccess: "https://calendly.com/henneberger-daniel/30min",
   github: "https://github.com/henneberger/highwater",
   discord: "#",
   x: "#",

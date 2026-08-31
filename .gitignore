@@ -3,6 +3,9 @@
 __pycache__/
 *.pyc
 target/
+build/
+dist/
+*.egg-info/
 website/.docusaurus/
 website/build/
 website/node_modules/

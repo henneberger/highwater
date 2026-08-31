@@ -176,6 +176,8 @@ yarn start
 
 The public documentation covers durable Processes, managed event ingestion, event time, batching, scheduled deployments, joins, scaling, backpressure, upgrades, recovery, delivery guarantees, and lease fencing.
 
+The standalone product landing page lives in [`landing`](landing/README.md). Its static files can be previewed directly and deployed to an S3 origin without an application server.
+
 ## Repository
 
 The repository contains the execution engine, Python SDK, examples, benchmarks, and documentation source. Internal crate and module names remain implementation details behind the packaged CLI.
@@ -187,6 +189,7 @@ examples/             streaming applications
 benchmarks/           durable throughput benchmark
 docs/                 implementation design notes
 website/              public documentation
+landing/              product landing page
 ```
 
 ## Build the implementation

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111f">
+    <meta name="description" content="Highwater is durable execution for streaming applications. Write stateful event processing as ordinary Python.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Highwater — Durable execution for streaming applications">
+    <meta property="og:description" content="Write stateful streaming applications as ordinary Python. Highwater owns ordering, durable state, event time, retries, and scaling.">
+    <meta property="og:url" content="https://highwater.cloud/">
+    <meta property="og:site_name" content="Highwater">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Highwater — Durable execution for streaming applications">
+    <meta name="twitter:description" content="Write stateful streaming applications as ordinary Python.">
+    <link rel="canonical" href="https://highwater.cloud/">
+    <link rel="icon" href="./assets/mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+    <title>Highwater — Durable execution for streaming applications</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-header>
+      <div class="nav shell">
+        <a class="brand" href="#top" aria-label="Highwater home">
+          <img src="./assets/mark.svg" width="34" height="34" alt="">
+          <span>Highwater</span>
+        </a>
+        <nav class="nav-links" aria-label="Main navigation">
+          <a href="#model">How it works</a>
+          <a href="#event-time">Event time</a>
+          <a href="#guarantees">Guarantees</a>
+        </nav>
+        <div class="nav-actions">
+          <a class="text-link" href="#" data-config-link="docs">Docs</a>
+          <a class="button button-small" href="#access">Get early access</a>
+        </div>
+        <button class="menu-button" type="button" aria-expanded="false" aria-controls="mobile-navigation" data-menu-button>
+          <span class="sr-only">Open navigation</span>
+          <span></span><span></span>
+        </button>
+      </div>
+      <nav class="mobile-nav shell" id="mobile-navigation" aria-label="Mobile navigation" hidden data-mobile-nav>
+        <a href="#model">How it works</a>
+        <a href="#event-time">Event time</a>
+        <a href="#guarantees">Guarantees</a>
+        <a href="#" data-config-link="docs">Docs</a>
+        <a class="mobile-cta" href="#access">Get early access</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" id="top">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <div class="eyebrow"><span></span> Durable execution for streaming applications</div>
+            <h1>Write stateful streaming applications as ordinary Python.</h1>
+            <p class="hero-lead">
+              Highwater keeps each key ordered and recovers accepted events, state, and output
+              after failures—with event-time progress built in.
+            </p>
+            <div class="hero-actions">
+              <a class="button" href="#access">Get early access <span aria-hidden="true">→</span></a>
+              <button class="install-command" type="button" data-copy="pip install highwater" aria-label="Copy pip install highwater">
+                <span class="prompt">$</span>
+                <code>pip install highwater</code>
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 6V4.8C7 3.8 7.8 3 8.8 3h6.4c1 0 1.8.8 1.8 1.8v6.4c0 1-.8 1.8-1.8 1.8H14M4.8 7h6.4c1 0 1.8.8 1.8 1.8v6.4c0 1-.8 1.8-1.8 1.8H4.8c-1 0-1.8-.8-1.8-1.8V8.8C3 7.8 3.8 7 4.8 7Z"/></svg>
+                <span class="copy-label" aria-live="polite">Copy</span>
+              </button>
+            </div>
+            <p class="hero-note">One Process per business key. No topology builder. Highwater recovers accepted events and Process state.</p>
+          </div>
+
+          <div class="product-window" aria-label="Highwater Process example">
+            <div class="window-bar">
+              <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="window-title">balance.py</div>
+              <div class="window-status"><span></span> Running</div>
+            </div>
+            <div class="code-panel">
+              <pre><code><span class="code-purple">@process.defn</span>(key=<span class="code-green">"account_id"</span>)
+<span class="code-purple">@dataclass</span>
+<span class="code-blue">class</span> <span class="code-yellow">Balance</span>:
+    total: <span class="code-blue">int</span> = <span class="code-orange">0</span>
+
+    <span class="code-purple">@process.event</span>
+    <span class="code-blue">async def</span> <span class="code-yellow">apply</span>(self, event):
+        self.total += event.amount
+        <span class="code-blue">return</span> {
+            <span class="code-green">"balance"</span>: self.total
+        }</code></pre>
+            </div>
+            <div class="event-rail" aria-label="Process execution timeline">
+              <div class="rail-row rail-head">
+                <span>Live events</span>
+                <span>State</span>
+              </div>
+              <div class="rail-row">
+                <span class="event-pill"><i></i> deposit <b>+$50</b></span>
+                <span class="state-change"><s>$120</s> <strong>$170</strong></span>
+              </div>
+              <div class="rail-row">
+                <span class="event-pill"><i></i> purchase <b>−$18</b></span>
+                <span class="state-change"><s>$170</s> <strong>$152</strong></span>
+              </div>
+              <div class="commit-line"><span></span> State and output committed together</div>
+            </div>
+          </div>
+        </div>
+        <div class="signal-strip" aria-label="Highwater capabilities">
+          <span>Ordered per key</span><i></i><span>Durable state</span><i></i>
+          <span>Event-time aware</span><i></i><span>Elastic execution</span>
+        </div>
+      </section>
+
+      <section class="section model-section" id="model">
+        <div class="shell">
+          <div class="section-heading split-heading">
+            <div>
+              <p class="kicker">The programming model</p>
+              <h2>Model each key as a Process. Write ordinary Python.</h2>
+            </div>
+            <p>
+              A Process is one durable state machine for every account, device, user, or order.
+              Events for one key stay ordered. Different keys run independently.
+            </p>
+          </div>
+
+          <div class="process-flow" aria-label="Events pass through a durable Process into state and output">
+            <div class="flow-node source-node">
+              <div class="flow-label">Events</div>
+              <div class="event-stack" aria-hidden="true">
+                <span><i></i> account-a</span><span><i></i> account-c</span><span><i></i> account-b</span>
+              </div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true"><span></span></div>
+            <div class="flow-node process-node">
+              <img src="./assets/mark.svg" width="38" height="38" alt="">
+              <div><strong>Balance</strong><small>Durable Process</small></div>
+              <div class="process-live"><i></i> active</div>
+            </div>
+            <div class="flow-arrow" aria-hidden="true"><span></span></div>
+            <div class="flow-outputs">
+              <div class="flow-node compact-node"><span class="node-icon">S</span><div><strong>State</strong><small>Private per key</small></div></div>
+              <div class="flow-node compact-node"><span class="node-icon output-icon">↗</span><div><strong>Output</strong><small>Committed atomically</small></div></div>
+            </div>
+          </div>
+
+          <div class="principles-grid">
+            <article>
+              <span class="principle-number">01</span>
+              <h3>Code owns behavior</h3>
+              <p>Use branches, libraries, and models without forcing application logic into a graph of operators.</p>
+            </article>
+            <article>
+              <span class="principle-number">02</span>
+              <h3>Highwater owns progress</h3>
+              <p>Accepted events, state transitions, timers, and output recover together after execution failures.</p>
+            </article>
+            <article>
+              <span class="principle-number">03</span>
+              <h3>Keys unlock scale</h3>
+              <p>One key stays consistent while unrelated keys can make progress concurrently.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section event-section" id="event-time">
+        <div class="shell event-grid">
+          <div class="event-copy">
+            <p class="kicker">Event-time progress</p>
+            <h2>Wait for what happened—not when it arrived.</h2>
+            <p>
+              Late events are normal. A Process can wait until configured source progress indicates
+              that no earlier on-time event is expected, then resume ordinary application code.
+            </p>
+            <ul class="check-list">
+              <li><span>✓</span> Source progress and idleness are managed for you</li>
+              <li><span>✓</span> Late-data policy is explicit and recoverable</li>
+              <li><span>✓</span> Timers and event-time gates survive restarts</li>
+            </ul>
+          </div>
+          <div class="watermark-card">
+            <div class="watermark-head">
+              <span>Order fulfillment</span>
+              <span class="live-badge"><i></i> live</span>
+            </div>
+            <div class="timeline">
+              <p class="sr-only">Created at 10:02, paid at 10:06, and an address update for 10:04 arrived late. Source progress is complete through 10:12, so the event-time gate is open.</p>
+              <div class="timeline-labels"><span>10:00</span><span>10:05</span><span>10:10</span><span>10:15</span></div>
+              <div class="timeline-track">
+                <span class="event-dot event-one" data-label="created"></span>
+                <span class="event-dot event-two" data-label="paid"></span>
+                <span class="event-dot late-dot" data-label="address updated"></span>
+                <span class="watermark-line"><b>complete through 10:12</b></span>
+              </div>
+            </div>
+            <div class="gate-code">
+              <span class="gate-icon">⌁</span>
+              <code>await process.wait_until(<br>&nbsp;&nbsp;process.event_time &gt;= ship_at<br>)</code>
+              <span class="gate-open">gate open</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section batch-section">
+        <div class="shell">
+          <div class="batch-callout">
+            <div class="batch-copy">
+              <p class="kicker">Adaptive batching</p>
+              <h2>Batch by size or latency.</h2>
+              <p>
+                Vectorize model inference under load. When traffic is sparse,
+                Highwater flushes before the oldest event exceeds its latency budget.
+              </p>
+            </div>
+            <div class="batch-visual">
+              <div class="batch-meter">
+                <div class="meter-head"><span>Embedding batch</span><strong>96 / 128</strong></div>
+                <div class="meter-track"><span></span></div>
+                <div class="meter-foot"><span>Oldest event</span><strong>18ms <i>/ 25ms</i></strong></div>
+              </div>
+              <div class="batch-rule"><span>Dispatch on</span><strong>size</strong><i>or</i><strong>latency</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section guarantees-section" id="guarantees">
+        <div class="shell">
+          <div class="section-heading centered-heading">
+            <p class="kicker">A precise failure contract</p>
+            <h2>Durability is more than remembering a watermark.</h2>
+            <p>Highwater protects the event and every state transition it causes.</p>
+          </div>
+          <div class="guarantee-grid">
+            <article><div class="guarantee-icon"><span>↓</span></div><h3>Durable admission</h3><p>An event is accepted only after its identity and payload are durably recorded.</p></article>
+            <article><div class="guarantee-icon"><span>≡</span></div><h3>Ordered state</h3><p>One key commits one transition at a time, even when an invocation is retried.</p></article>
+            <article><div class="guarantee-icon"><span>◇</span></div><h3>Atomic output</h3><p>Process state and Highwater output become visible in the same commit.</p></article>
+            <article><div class="guarantee-icon"><span>↻</span></div><h3>Recoverable progress</h3><p>Mailboxes, timers, event-time progress, and operator state recover together.</p></article>
+          </div>
+          <p class="guarantee-footnote">
+            Application code may run more than once after failure. Fenced completions prevent stale attempts
+            from committing; external APIs should use a stable idempotency key.
+          </p>
+        </div>
+      </section>
+
+      <section class="section use-cases-section">
+        <div class="shell">
+          <div class="section-heading split-heading compact-heading">
+            <div><p class="kicker">Built for application logic</p><h2>Streams with decisions inside.</h2></div>
+            <p>Use native streaming state where it helps. Keep the logic that makes your product different in code.</p>
+          </div>
+          <div class="use-case-list">
+            <article><span>01</span><div><h3>Online recommendations</h3><p>Join live behavior with the version of product data valid when the event occurred.</p></div><b>Temporal joins</b></article>
+            <article><span>02</span><div><h3>Device intelligence</h3><p>Track per-device state, close event-time windows, and respond to meaningful conditions.</p></div><b>Event-time gates</b></article>
+            <article><span>03</span><div><h3>Risk and account state</h3><p>Apply authorizations, reversals, and policy changes in consistent per-account order.</p></div><b>Keyed Processes</b></article>
+            <article><span>04</span><div><h3>Model inference</h3><p>Batch embeddings or predictions by size and latency without turning off the stream.</p></div><b>Adaptive batches</b></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta-section" id="access">
+        <div class="shell">
+          <div class="cta-card">
+            <div class="contour contour-one" aria-hidden="true"></div>
+            <div class="contour contour-two" aria-hidden="true"></div>
+            <div class="cta-content">
+              <p class="kicker">Early access</p>
+              <h2>Build streaming applications without operating a stream-processing stack.</h2>
+              <p>Join the early-access list for product updates, design partnerships, and the first hosted deployments.</p>
+              <div class="cta-actions">
+                <a class="button button-light" href="#" data-config-link="earlyAccess">Get early access <span aria-hidden="true">→</span></a>
+                <a class="cta-docs" href="#" data-config-link="docs">Read the docs</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-main">
+        <div class="footer-brand">
+          <a class="brand" href="#top"><img src="./assets/mark.svg" width="34" height="34" alt=""><span>Highwater</span></a>
+          <p>Durable execution for streaming applications.</p>
+        </div>
+        <div class="footer-links">
+          <div><strong>Product</strong><a href="#model">How it works</a><a href="#event-time">Event time</a><a href="#guarantees">Guarantees</a></div>
+          <div><strong>Resources</strong><a href="#" data-config-link="docs">Documentation</a><a href="#" data-config-link="github">GitHub</a><a href="#guarantees">Guarantees</a></div>
+          <div><strong>Connect</strong><a href="#" data-config-link="discord">Discord</a><a href="#" data-config-link="x">X / Twitter</a><a href="#" data-config-link="linkedin">LinkedIn</a><a href="#" data-config-link="bluesky">Bluesky</a></div>
+        </div>
+      </div>
+      <div class="shell footer-bottom">
+        <span>© <span data-year></span> Highwater</span>
+        <div><a href="#" data-config-link="privacy">Privacy</a><a href="#" data-config-link="terms">Terms</a></div>
+      </div>
+    </footer>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

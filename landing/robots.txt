@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://highwater.cloud/sitemap.xml

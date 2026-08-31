@@ -41,3 +41,11 @@ Performance work may change encoding, batching, caches, or transport, but not th
 - unknown durable formats and stale ownership epochs fail closed.
 
 Before claiming multi-host durability, validate process death, host loss, owner fencing, truncated writes, delayed duplicate completions, checkpoint interruption, object-store timeout, and local-state deletion under continuous load. Throughput without those failure drills is only a speed result.
+
+The opt-in S3 chaos test exercises remote routing, hard owner loss, lease takeover, stale-completion fencing, checkpoint recovery after local-state deletion, and retry deduplication across an object-store outage. It starts two service processes and an isolated MinIO instance:
+
+```bash
+HIGHWATER_S3_CHAOS=1 PYTHONPATH=src python3 tests/test_s3_chaos.py -v
+```
+
+Set `HIGHWATER_S3_CHAOS_URI=s3://bucket/test-prefix` to run against AWS S3 instead. Every run appends a unique prefix and removes it afterward; set `HIGHWATER_S3_CHAOS_KEEP=1` to retain the objects for inspection.

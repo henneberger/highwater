@@ -71,9 +71,12 @@ class S3ChaosTest(unittest.TestCase):
         configured_uri = os.environ.get("HIGHWATER_S3_CHAOS_URI")
         run_id = f"run-{uuid.uuid4().hex}"
         if configured_uri:
+            self._load_profile_credentials()
             self.journal_uri = f"{configured_uri.rstrip('/')}/{run_id}"
+            self.owner_lease_seconds = 15
         else:
             self.journal_uri = self._start_minio(run_id)
+            self.owner_lease_seconds = 2
 
         self.cluster_token = uuid.uuid4().hex + uuid.uuid4().hex
         self.execution_token = uuid.uuid4().hex + uuid.uuid4().hex
@@ -91,6 +94,35 @@ class S3ChaosTest(unittest.TestCase):
                 }
             )
         )
+
+    def _load_profile_credentials(self) -> None:
+        profile = self.aws_env.get("AWS_PROFILE")
+        if not profile or self.aws_env.get("AWS_ACCESS_KEY_ID"):
+            return
+        exported = subprocess.run(
+            [
+                "aws",
+                "configure",
+                "export-credentials",
+                "--profile",
+                profile,
+                "--format",
+                "process",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        credentials = json.loads(exported.stdout)
+        self.aws_env.update(
+            {
+                "AWS_ACCESS_KEY_ID": credentials["AccessKeyId"],
+                "AWS_SECRET_ACCESS_KEY": credentials["SecretAccessKey"],
+                "AWS_EC2_METADATA_DISABLED": "true",
+            }
+        )
+        if credentials.get("SessionToken"):
+            self.aws_env["AWS_SESSION_TOKEN"] = credentials["SessionToken"]
 
     def _cleanup(self) -> None:
         for process, log in reversed(self.processes):
@@ -145,7 +177,7 @@ class S3ChaosTest(unittest.TestCase):
             stdout=subprocess.DEVNULL,
         )
         endpoint = f"http://127.0.0.1:{port}"
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 with urllib.request.urlopen(f"{endpoint}/minio/health/live", timeout=1):
@@ -213,7 +245,7 @@ class S3ChaosTest(unittest.TestCase):
                 "--log-shards",
                 "3",
                 "--lease-seconds",
-                "2",
+                str(self.owner_lease_seconds),
             ],
             cwd=ROOT,
             env=self.aws_env,
@@ -225,15 +257,15 @@ class S3ChaosTest(unittest.TestCase):
         return process
 
     def _wait_for_node(self, process: subprocess.Popen[bytes], port: int, log: Any) -> None:
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 60
         url = f"http://127.0.0.1:{port}/admin/process-partitions"
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 log.flush()
                 self.fail((self.root / Path(log.name).name).read_text())
             try:
-                status, _ = request_json("GET", url, timeout=1)
-            except urllib.error.URLError:
+                status, _ = request_json("GET", url, timeout=2)
+            except (TimeoutError, urllib.error.URLError):
                 time.sleep(0.1)
                 continue
             if status == 200:
@@ -242,7 +274,7 @@ class S3ChaosTest(unittest.TestCase):
         self.fail(f"node on port {port} did not become ready")
 
     def _wait_for_owners(self, port: int, node_id: str, *, minimum_epoch: int = 1) -> list[dict[str, Any]]:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 60
         url = f"http://127.0.0.1:{port}/admin/process-partitions"
         while time.monotonic() < deadline:
             status, owners = request_json("GET", url, timeout=2)
@@ -257,7 +289,7 @@ class S3ChaosTest(unittest.TestCase):
         self.fail(f"partitions did not become active on {node_id}")
 
     def _poll(self, execution_port: int) -> dict[str, Any]:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             for partition in (1, 2):
                 status, activation = request_json(
@@ -272,7 +304,7 @@ class S3ChaosTest(unittest.TestCase):
                         "lease_seconds": 1,
                         "partition_id": partition,
                     },
-                    timeout=2,
+                    timeout=10,
                 )
                 if status == 200 and activation is not None:
                     return activation
@@ -399,7 +431,7 @@ class S3ChaosTest(unittest.TestCase):
             f"http://127.0.0.1:{b_public}/processes/chaos-process/events",
             first_event,
         )
-        self.assertEqual(status, 201)
+        self.assertEqual(status, 201, duplicate)
         self.assertEqual(duplicate[0]["disposition"], "duplicate")
 
         second_event = {

@@ -48,4 +48,4 @@ The opt-in S3 chaos test exercises remote routing, hard owner loss, lease takeov
 HIGHWATER_S3_CHAOS=1 PYTHONPATH=src python3 tests/test_s3_chaos.py -v
 ```
 
-Set `HIGHWATER_S3_CHAOS_URI=s3://bucket/test-prefix` to run against AWS S3 instead. Every run appends a unique prefix and removes it afterward; set `HIGHWATER_S3_CHAOS_KEEP=1` to retain the objects for inspection.
+Set `AWS_PROFILE` and `HIGHWATER_S3_CHAOS_URI=s3://bucket/test-prefix` to run against AWS S3 instead. Every run appends a unique prefix and removes it afterward; set `HIGHWATER_S3_CHAOS_KEEP=1` to retain the objects for inspection.

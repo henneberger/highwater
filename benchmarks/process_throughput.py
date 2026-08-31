@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from temporal_code import Client, ProcessOptions, streaming
+from highwater import Client, ProcessOptions, streaming
 
 
 @dataclass(frozen=True)

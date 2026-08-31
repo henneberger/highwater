@@ -11,11 +11,11 @@ from .errors import ActivityError, ChildWorkflowError, NonDeterminismError, Work
 from .model import ActivityOptions, ChildWorkflowOptions, Command, Event, RetryPolicy
 
 T = TypeVar("T")
-_runtime: contextvars.ContextVar["ReplayRuntime"] = contextvars.ContextVar("temporal_code_runtime")
+_runtime: contextvars.ContextVar["ReplayRuntime"] = contextvars.ContextVar("highwater_runtime")
 
 
 def _name(value: str | Callable[..., Any]) -> str:
-    return value if isinstance(value, str) else getattr(value, "__temporal_code_name__", value.__name__)
+    return value if isinstance(value, str) else getattr(value, "__highwater_name__", value.__name__)
 
 
 class WorkflowAwaitable(Generic[T]):
@@ -237,7 +237,7 @@ async def execute_child_workflow(
     workflow_id: str | None = None,
     options: ChildWorkflowOptions | None = None,
 ) -> Any:
-    name = fn if isinstance(fn, str) else getattr(fn, "__temporal_code_workflow__", fn.__name__)
+    name = fn if isinstance(fn, str) else getattr(fn, "__highwater_workflow__", fn.__name__)
     selected = options or ChildWorkflowOptions(workflow_id=workflow_id)
     if workflow_id is not None and options is not None:
         raise ValueError("workflow_id must be provided directly or through options")

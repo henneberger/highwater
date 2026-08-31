@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from temporal_code import (
+from highwater import (
     ChildWorkflowOptions,
     continue_as_new,
     execute_child_workflow,

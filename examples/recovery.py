@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 
-from temporal_code import Client
+from highwater import Client
 from examples.order import OrderWorkflow
 
 

@@ -241,7 +241,7 @@ pub(crate) fn finish_process_execution(
             .as_object()
             .filter(|value| {
                 value
-                    .get("__temporal_code_transition__")
+                    .get("__highwater_transition__")
                     .and_then(Value::as_bool)
                     == Some(true)
             })
@@ -411,7 +411,7 @@ pub(crate) fn finish_sharded_process_execution(
         .as_object()
         .filter(|value| {
             value
-                .get("__temporal_code_transition__")
+                .get("__highwater_transition__")
                 .and_then(Value::as_bool)
                 == Some(true)
         })

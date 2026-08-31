@@ -23,6 +23,11 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use highwater_protocol::{
+    ActivityCompletion, ActivityTask, Command, Event, PROTOCOL_VERSION, PollRequest,
+    ProcessActivationBatch, ProcessCompletionBatch, ProcessLeaseRenewal, QueryCompletion,
+    QueryTask, WorkflowActivation, WorkflowCompletion,
+};
 use reqwest::Client as HttpClient;
 use rocksdb::{DB, IteratorMode, Options, WriteBatch, WriteOptions, checkpoint::Checkpoint};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -35,11 +40,6 @@ use std::{
     path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
-};
-use temporal_code_protocol::{
-    ActivityCompletion, ActivityTask, Command, Event, PROTOCOL_VERSION, PollRequest,
-    ProcessActivationBatch, ProcessCompletionBatch, ProcessLeaseRenewal, QueryCompletion,
-    QueryTask, WorkflowActivation, WorkflowCompletion,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};

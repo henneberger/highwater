@@ -2,8 +2,8 @@ use crate::*;
 pub async fn run() -> Result<()> {
     let mut listen = "127.0.0.1:7233".to_owned();
     let mut execution_listen = None;
-    let mut state_dir = PathBuf::from("temporal-code-rust-state");
-    let mut object_dir = PathBuf::from("temporal-code-rust-objects");
+    let mut state_dir = PathBuf::from("highwater-rust-state");
+    let mut object_dir = PathBuf::from("highwater-rust-objects");
     let mut journal_uri = None;
     let mut node_id = "local".to_owned();
     let mut endpoint = String::new();
@@ -363,7 +363,7 @@ pub async fn run() -> Result<()> {
         .with_state(state);
     let app = if let Some(execution_listen) = execution_listen {
         let listener = TcpListener::bind(&execution_listen).await?;
-        println!("temporal-code execution gateway listening on {execution_listen}");
+        println!("highwater execution gateway listening on {execution_listen}");
         tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, internal_app).await {
                 eprintln!("execution gateway stopped: {error}");
@@ -374,7 +374,7 @@ pub async fn run() -> Result<()> {
         public_app.merge(internal_app)
     };
     let listener = TcpListener::bind(&listen).await?;
-    println!("temporal-code Rust core listening on {listen}");
+    println!("highwater Rust core listening on {listen}");
     axum::serve(listener, app).await?;
     Ok(())
 }

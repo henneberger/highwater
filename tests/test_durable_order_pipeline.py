@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from examples.durable_order_pipeline import OrderEvent, OrderIntake, reserve_order_inventory
-from temporal_code import Event, Registry
-from temporal_code.workflow_runner import WorkflowRunner
+from highwater import Event, Registry
+from highwater.workflow_runner import WorkflowRunner
 
 
 class DurableOrderPipelineTest(unittest.TestCase):

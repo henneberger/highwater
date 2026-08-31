@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 
 from benchmarks.netherite_partition_throughput import assigned_partitions
-from temporal_code.registry import Registry
-from temporal_code.rust_worker import RustWorker
+from highwater.registry import Registry
+from highwater.rust_worker import RustWorker
 
 
 class PartitionExecutionTest(unittest.TestCase):

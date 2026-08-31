@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package temporal_code.protocol.v1;
+package highwater.protocol.v1;
 
 message Payload {
   enum Encoding {

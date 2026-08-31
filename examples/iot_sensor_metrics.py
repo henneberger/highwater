@@ -6,7 +6,7 @@ import base64
 import json
 import uuid
 
-from temporal_code import (
+from highwater import (
     Client,
     Comparison,
     FilterSpec,

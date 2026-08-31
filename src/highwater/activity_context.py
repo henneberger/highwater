@@ -22,7 +22,7 @@ class ActivityContext:
         return self.cancelled_callback()
 
 
-_context: contextvars.ContextVar[ActivityContext] = contextvars.ContextVar("temporal_code_activity")
+_context: contextvars.ContextVar[ActivityContext] = contextvars.ContextVar("highwater_activity")
 
 
 def current_activity() -> ActivityContext:

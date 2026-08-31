@@ -539,6 +539,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "highwater-protocol"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "highwater-server"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "highwater-protocol",
+ "object_store",
+ "percent-encoding",
+ "reqwest",
+ "rmp-serde",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1707,34 +1735,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "temporal-code-protocol"
-version = "0.0.1"
-dependencies = [
- "base64",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "temporal-code-server"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "object_store",
- "percent-encoding",
- "reqwest",
- "rmp-serde",
- "rocksdb",
- "serde",
- "serde_json",
- "temporal-code-protocol",
- "tokio",
- "uuid",
 ]
 
 [[package]]

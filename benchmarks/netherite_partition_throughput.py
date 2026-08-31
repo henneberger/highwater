@@ -57,7 +57,7 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
     server_binary = (ROOT / arguments.server).resolve()
     if not server_binary.is_file():
         raise FileNotFoundError(
-            f"{server_binary} does not exist; run cargo build --release -p temporal-code-server"
+            f"{server_binary} does not exist; run cargo build --release -p highwater-server"
         )
     port = available_port()
     target = f"http://127.0.0.1:{port}"
@@ -99,7 +99,7 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
                     [
                         sys.executable,
                         "-m",
-                        "temporal_code.rust_worker",
+                        "highwater.rust_worker",
                         "benchmarks.process_throughput",
                         "--target",
                         target,
@@ -159,7 +159,7 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--server", default="target/release/temporal-code-server"
+        "--server", default="target/release/highwater-server"
     )
     parser.add_argument("--events", type=int, default=100_000)
     parser.add_argument("--execution-instances", type=int, default=10)

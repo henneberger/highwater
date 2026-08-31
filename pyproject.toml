@@ -7,7 +7,7 @@ name = "highwater"
 version = "0.0.1"
 description = "Durable execution for streaming applications"
 readme = "README.md"
-license = "Apache-2.0"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = []
 
@@ -17,8 +17,7 @@ Documentation = "https://highwater.cloud"
 Repository = "https://github.com/henneberger/highwater"
 
 [project.scripts]
-highwater-worker = "temporal_code.rust_worker:main"
-temporal-code-worker = "temporal_code.rust_worker:main"
+highwater-worker = "highwater.rust_worker:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

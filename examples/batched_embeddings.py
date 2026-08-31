@@ -7,7 +7,7 @@ import json
 import uuid
 from dataclasses import dataclass
 
-from temporal_code import Client, streaming
+from highwater import Client, streaming
 
 
 @dataclass(frozen=True)

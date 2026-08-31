@@ -5,7 +5,7 @@ import asyncio
 import json
 import uuid
 
-from temporal_code import Client, WorkflowOptions
+from highwater import Client, WorkflowOptions
 
 
 async def main(target: str) -> None:

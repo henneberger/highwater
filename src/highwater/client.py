@@ -405,7 +405,7 @@ class Client:
                 f"{self.target}{path}/packed",
                 data=body,
                 method="POST",
-                headers={"Content-Type": "application/x-temporal-code-batch"},
+                headers={"Content-Type": "application/x-highwater-batch"},
             )
             try:
                 with urlopen(request, timeout=30) as response:
@@ -425,7 +425,7 @@ class Client:
         workflow_id: str | None = None,
         options: WorkflowOptions | None = None,
     ) -> WorkflowHandle:
-        workflow_type = workflow if isinstance(workflow, str) else getattr(workflow, "__temporal_code_workflow__", workflow.__name__)
+        workflow_type = workflow if isinstance(workflow, str) else getattr(workflow, "__highwater_workflow__", workflow.__name__)
         response = await self._request("POST", "/workflows", {
             "workflow_type": workflow_type,
             "args": args,
@@ -541,7 +541,7 @@ class Client:
         if isinstance(spec, ProcessSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
                 spec.workflow,
-                "__temporal_code_workflow__",
+                "__highwater_workflow__",
                 spec.workflow.__name__,
             )
             return await self._request("POST", "/processes", {
@@ -563,7 +563,7 @@ class Client:
         if isinstance(spec, WindowAggregateSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
                 spec.workflow,
-                "__temporal_code_workflow__",
+                "__highwater_workflow__",
                 spec.workflow.__name__,
             )
             return await self._request("POST", "/stream-schedules", {
@@ -581,7 +581,7 @@ class Client:
         if isinstance(spec, FilterSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
                 spec.workflow,
-                "__temporal_code_workflow__",
+                "__highwater_workflow__",
                 spec.workflow.__name__,
             )
             return await self._request("POST", "/stream-filters", {
@@ -596,7 +596,7 @@ class Client:
         if isinstance(spec, IntervalJoinSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
                 spec.workflow,
-                "__temporal_code_workflow__",
+                "__highwater_workflow__",
                 spec.workflow.__name__,
             )
             return await self._request("POST", "/interval-joins", {
@@ -612,7 +612,7 @@ class Client:
         if isinstance(spec, DeduplicateSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
                 spec.workflow,
-                "__temporal_code_workflow__",
+                "__highwater_workflow__",
                 spec.workflow.__name__,
             )
             return await self._request("POST", "/deduplicates", {
@@ -625,7 +625,7 @@ class Client:
             raise TypeError(f"unsupported operator spec: {type(spec).__name__}")
         workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
             spec.workflow,
-            "__temporal_code_workflow__",
+            "__highwater_workflow__",
             spec.workflow.__name__,
         )
         return await self._request("POST", "/temporal-joins", {
@@ -645,31 +645,31 @@ class Client:
         process_id: str | None = None,
         options: ProcessOptions | None = None,
     ) -> ProcessHandle:
-        name = getattr(definition, "__temporal_code_process__", None)
+        name = getattr(definition, "__highwater_process__", None)
         if name is None:
             raise TypeError(f"{definition.__name__} is missing @streaming.process")
         selected = options or ProcessOptions(
-            key=getattr(definition, "__temporal_code_process_key__"),
-            event_time_gate=getattr(definition, "__temporal_code_process_gate__"),
+            key=getattr(definition, "__highwater_process_key__"),
+            event_time_gate=getattr(definition, "__highwater_process_gate__"),
         )
         identifier = process_id or name
         batch_size = selected.batch_size or getattr(
-            definition, "__temporal_code_batch_max_size__"
+            definition, "__highwater_batch_max_size__"
         )
         batch_delay = (
             selected.batch_delay
             if selected.batch_delay is not None
-            else getattr(definition, "__temporal_code_batch_max_delay__")
+            else getattr(definition, "__highwater_batch_max_delay__")
         )
         await self.deploy(ProcessSpec(
             process_id=identifier,
             input=input,
             workflow=definition,
-            build_id=getattr(definition, "__temporal_code_build_id__"),
-            state_version=getattr(definition, "__temporal_code_state_version__"),
-            migrations_from=getattr(definition, "__temporal_code_migrations_from__"),
+            build_id=getattr(definition, "__highwater_build_id__"),
+            state_version=getattr(definition, "__highwater_state_version__"),
+            migrations_from=getattr(definition, "__highwater_migrations_from__"),
             key=selected.key,
-            event_time=getattr(definition, "__temporal_code_process_event_time__"),
+            event_time=getattr(definition, "__highwater_process_event_time__"),
             event_time_gate=selected.event_time_gate,
             max_concurrency=selected.max_concurrency,
             capacity=selected.capacity,
@@ -682,7 +682,7 @@ class Client:
             identifier,
             input,
             selected.key,
-            getattr(definition, "__temporal_code_process_event_time__"),
+            getattr(definition, "__highwater_process_event_time__"),
         )
 
     async def start(
@@ -695,7 +695,7 @@ class Client:
     ) -> ProcessHandle:
         if source is not None and "://" in source:
             raise NotImplementedError("external stream connectors are not implemented")
-        name = getattr(definition, "__temporal_code_process__", None)
+        name = getattr(definition, "__highwater_process__", None)
         if name is None:
             raise TypeError(f"{definition.__name__} is missing @streaming.process")
         identifier = process_id or name
@@ -718,8 +718,8 @@ class Client:
         handle.direct_ingress = (
             owns_input
             and (options or ProcessOptions(
-                key=getattr(definition, "__temporal_code_process_key__"),
-                event_time_gate=getattr(definition, "__temporal_code_process_gate__"),
+                key=getattr(definition, "__highwater_process_key__"),
+                event_time_gate=getattr(definition, "__highwater_process_gate__"),
             )).event_time_gate == EventTimeGate.IMMEDIATE
         )
         return handle

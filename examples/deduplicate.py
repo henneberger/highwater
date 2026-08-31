@@ -5,7 +5,7 @@ import asyncio
 import json
 import uuid
 
-from temporal_code import Client, DeduplicateSpec, StreamOptions, workflow
+from highwater import Client, DeduplicateSpec, StreamOptions, workflow
 
 
 @workflow.defn

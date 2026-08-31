@@ -3,9 +3,9 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-import temporal_code
+import highwater
 
-from temporal_code import (
+from highwater import (
     Client,
     Comparison,
     DeduplicateSpec,
@@ -27,7 +27,7 @@ from temporal_code import (
     workflow,
     streaming,
 )
-from temporal_code.workflow_runner import WorkflowRunner
+from highwater.workflow_runner import WorkflowRunner
 
 
 class SdkTest(unittest.TestCase):
@@ -36,7 +36,7 @@ class SdkTest(unittest.TestCase):
         self.assertTrue(callable(streaming.event))
         self.assertTrue(callable(streaming.batch))
         self.assertFalse(hasattr(streaming, "defn"))
-        self.assertFalse(hasattr(temporal_code, "process"))
+        self.assertFalse(hasattr(highwater, "process"))
 
     def test_stream_writer_resumes_cursor_and_claims_fenced_epoch(self):
         class RecordingClient(Client):
@@ -257,7 +257,7 @@ class SdkTest(unittest.TestCase):
 
         self.assertEqual(activation.commands[0].type, "COMPLETE_WORKFLOW")
         self.assertEqual(activation.commands[0].attributes["result"], {
-            "__temporal_code_transition__": True,
+            "__highwater_transition__": True,
             "state": {"balance": 5},
             "emit": {"balance": 5},
         })
@@ -337,7 +337,7 @@ class SdkTest(unittest.TestCase):
             for document_id, text in [("a", "hello"), ("b", "world!")]
         ]
         results = asyncio.run(
-            Embeddings.__temporal_code_process_batch_run__(Embeddings(), envelopes)
+            Embeddings.__highwater_process_batch_run__(Embeddings(), envelopes)
         )
 
         self.assertEqual([result["state"] for result in results], [{}, {}])
@@ -345,8 +345,8 @@ class SdkTest(unittest.TestCase):
             [result["emit"]["embedding"] for result in results],
             [[5], [6]],
         )
-        self.assertEqual(Embeddings.__temporal_code_batch_max_size__, 32)
-        self.assertEqual(Embeddings.__temporal_code_batch_max_delay__, 0.02)
+        self.assertEqual(Embeddings.__highwater_batch_max_size__, 32)
+        self.assertEqual(Embeddings.__highwater_batch_max_delay__, 0.02)
 
     def test_process_handle_extracts_key_and_hides_stream_publish(self):
         @streaming.process

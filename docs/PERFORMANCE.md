@@ -22,9 +22,9 @@ These are single-machine results, not a cluster capacity claim. They demonstrate
 Build the service once, then run the self-contained harness:
 
 ```bash
-cargo build --release --bin temporal-code-server
+cargo build --release --bin highwater-server
 python3 benchmarks/netherite_partition_throughput.py \
-  --server target/release/temporal-code-server \
+  --server target/release/highwater-server \
   --events 100000 \
   --partitions 10 \
   --execution-instances 5 \

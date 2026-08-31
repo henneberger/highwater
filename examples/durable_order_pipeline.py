@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from time import monotonic
 
-from temporal_code import (
+from highwater import (
     ActivityOptions,
     Client,
     Comparison,

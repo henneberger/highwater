@@ -46,7 +46,7 @@ class Transition(Generic[S, O]):
 
     def _wire(self) -> dict[str, Any]:
         return {
-            "__temporal_code_transition__": True,
+            "__highwater_transition__": True,
             "state": _json_value(self.state),
             "emit": _json_value(self.emit),
         }
@@ -90,12 +90,12 @@ class _StreamingAnnotations:
             event_handlers = [
                 (attr, member)
                 for attr, member in vars(target).items()
-                if getattr(member, "__temporal_code_kind__", None) == "process_event"
+                if getattr(member, "__highwater_kind__", None) == "process_event"
             ]
             batch_handlers = [
                 (attr, member)
                 for attr, member in vars(target).items()
-                if getattr(member, "__temporal_code_kind__", None) == "process_batch"
+                if getattr(member, "__highwater_kind__", None) == "process_batch"
             ]
             if len(event_handlers) + len(batch_handlers) != 1:
                 raise TypeError(
@@ -109,9 +109,9 @@ class _StreamingAnnotations:
             if is_batch and get_origin(annotation) is list:
                 event_type = get_args(annotation)[0]
             migration_methods = [
-                (getattr(member, "__temporal_code_migration_from__"), attr, member)
+                (getattr(member, "__highwater_migration_from__"), attr, member)
                 for attr, member in vars(target).items()
-                if getattr(member, "__temporal_code_kind__", None) == "process_migration"
+                if getattr(member, "__highwater_kind__", None) == "process_migration"
             ]
             migrations = {version: attr for version, attr, _ in migration_methods}
             if len(migrations) != len(migration_methods):
@@ -223,28 +223,28 @@ class _StreamingAnnotations:
                     )
                 return Transition(state=asdict(instance), emit=result)._wire()
 
-            setattr(run, "__temporal_code_kind__", "run")
-            setattr(run, "__temporal_code_name__", "run")
+            setattr(run, "__highwater_kind__", "run")
+            setattr(run, "__highwater_name__", "run")
             selected_name = name or target.__name__
-            setattr(target, "__temporal_code_process__", selected_name)
-            setattr(target, "__temporal_code_workflow__", selected_name)
-            setattr(target, "__temporal_code_process_run__", run)
-            setattr(target, "__temporal_code_process_batch_run__", batch_run if is_batch else None)
-            setattr(target, "__temporal_code_process_key__", key)
-            setattr(target, "__temporal_code_process_event_time__", event_time)
-            setattr(target, "__temporal_code_process_gate__", wait_until)
-            setattr(target, "__temporal_code_state_version__", state_version)
-            setattr(target, "__temporal_code_build_id__", selected_build_id)
-            setattr(target, "__temporal_code_migrations_from__", tuple(sorted(migrations)))
-            setattr(target, "__temporal_code_batch_max_size__", getattr(handler, "__temporal_code_batch_max_size__", 64))
-            setattr(target, "__temporal_code_batch_max_delay__", getattr(handler, "__temporal_code_batch_max_delay__", 0.005))
+            setattr(target, "__highwater_process__", selected_name)
+            setattr(target, "__highwater_workflow__", selected_name)
+            setattr(target, "__highwater_process_run__", run)
+            setattr(target, "__highwater_process_batch_run__", batch_run if is_batch else None)
+            setattr(target, "__highwater_process_key__", key)
+            setattr(target, "__highwater_process_event_time__", event_time)
+            setattr(target, "__highwater_process_gate__", wait_until)
+            setattr(target, "__highwater_state_version__", state_version)
+            setattr(target, "__highwater_build_id__", selected_build_id)
+            setattr(target, "__highwater_migrations_from__", tuple(sorted(migrations)))
+            setattr(target, "__highwater_batch_max_size__", getattr(handler, "__highwater_batch_max_size__", 64))
+            setattr(target, "__highwater_batch_max_delay__", getattr(handler, "__highwater_batch_max_delay__", 0.005))
             return target
 
         return decorate(cls) if cls is not None else decorate
 
     def event(self, fn: Any) -> Any:
-        setattr(fn, "__temporal_code_kind__", "process_event")
-        setattr(fn, "__temporal_code_name__", fn.__name__)
+        setattr(fn, "__highwater_kind__", "process_event")
+        setattr(fn, "__highwater_name__", fn.__name__)
         return fn
 
     def batch(self, *, max_size: int = 128, max_delay: float = 0.01):
@@ -254,10 +254,10 @@ class _StreamingAnnotations:
             raise ValueError("batch max_delay must be finite and non-negative")
 
         def decorate(fn: Any) -> Any:
-            setattr(fn, "__temporal_code_kind__", "process_batch")
-            setattr(fn, "__temporal_code_name__", fn.__name__)
-            setattr(fn, "__temporal_code_batch_max_size__", max_size)
-            setattr(fn, "__temporal_code_batch_max_delay__", float(max_delay))
+            setattr(fn, "__highwater_kind__", "process_batch")
+            setattr(fn, "__highwater_name__", fn.__name__)
+            setattr(fn, "__highwater_batch_max_size__", max_size)
+            setattr(fn, "__highwater_batch_max_delay__", float(max_delay))
             return fn
 
         return decorate
@@ -267,8 +267,8 @@ class _StreamingAnnotations:
             raise ValueError("migration version must be positive")
 
         def decorate(fn: Any) -> Any:
-            setattr(fn, "__temporal_code_kind__", "process_migration")
-            setattr(fn, "__temporal_code_migration_from__", from_version)
+            setattr(fn, "__highwater_kind__", "process_migration")
+            setattr(fn, "__highwater_migration_from__", from_version)
             return fn
 
         return decorate

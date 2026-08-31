@@ -5,7 +5,7 @@ import asyncio
 import json
 import uuid
 
-from temporal_code import ChangeKind, Client, IntervalJoinSpec, StreamOptions, workflow
+from highwater import ChangeKind, Client, IntervalJoinSpec, StreamOptions, workflow
 
 
 @workflow.defn

@@ -1,4 +1,4 @@
-from temporal_code import activity, execute_activity, wait_condition, workflow
+from highwater import activity, execute_activity, wait_condition, workflow
 
 
 @activity.defn

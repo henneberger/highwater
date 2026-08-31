@@ -78,7 +78,7 @@ class RustWorker:
         default_process_poll_width = (
             8
             if any(
-                getattr(definition, "__temporal_code_process_batch_run__", None) is not None
+                getattr(definition, "__highwater_process_batch_run__", None) is not None
                 for definition in registry.workflows.values()
             )
             else 1
@@ -150,7 +150,7 @@ class RustWorker:
 
         workflow_type = activations[0]["workflow_type"]
         definition = self.registry.workflows[workflow_type]
-        batch_run = getattr(definition, "__temporal_code_process_batch_run__", None)
+        batch_run = getattr(definition, "__highwater_process_batch_run__", None)
         if batch_run is None:
             completions = await asyncio.gather(
                 *(execute(activation) for activation in activations)
@@ -227,17 +227,17 @@ class RustWorker:
         completions = []
         for batch in batches:
             definition = self.registry.workflows[batch["workflow_type"]]
-            max_size = getattr(definition, "__temporal_code_batch_max_size__", 64)
+            max_size = getattr(definition, "__highwater_batch_max_size__", 64)
             items = []
             envelopes = batch["envelopes"]
             for offset in range(0, len(envelopes), max_size):
                 chunk = envelopes[offset:offset + max_size]
-                batch_run = getattr(definition, "__temporal_code_process_batch_run__", None)
+                batch_run = getattr(definition, "__highwater_process_batch_run__", None)
                 try:
                     if batch_run is not None:
                         results = await batch_run(definition(), chunk)
                     else:
-                        run = getattr(definition, "__temporal_code_process_run__")
+                        run = getattr(definition, "__highwater_process_run__")
                         results = await asyncio.gather(*(
                             run(definition(), envelope) for envelope in chunk
                         ))
@@ -395,7 +395,7 @@ class RustWorker:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="temporal-code-worker")
+    parser = argparse.ArgumentParser(prog="highwater-worker")
     parser.add_argument("module", help="Python module containing annotated workflows and activities")
     parser.add_argument("--target", default="http://127.0.0.1:7233")
     parser.add_argument("--task-queue")

@@ -8,8 +8,8 @@ T = TypeVar("T", bound=type)
 
 
 def _mark(obj: F, kind: str, name: str | None = None) -> F:
-    setattr(obj, "__temporal_code_kind__", kind)
-    setattr(obj, "__temporal_code_name__", name or obj.__name__)
+    setattr(obj, "__highwater_kind__", kind)
+    setattr(obj, "__highwater_name__", name or obj.__name__)
     return obj
 
 
@@ -22,7 +22,7 @@ class _WorkflowAnnotations:
 
     def defn(self, cls: T | None = None, *, name: str | None = None):
         def decorate(target: T) -> T:
-            setattr(target, "__temporal_code_workflow__", name or target.__name__)
+            setattr(target, "__highwater_workflow__", name or target.__name__)
             return target
 
         return decorate(cls) if cls is not None else decorate

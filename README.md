@@ -186,7 +186,7 @@ The repository contains the execution engine, Python SDK, examples, benchmarks, 
 
 ```text
 crates/               execution and protocol implementation
-src/temporal_code/    Python SDK implementation
+src/highwater/    Python SDK implementation
 examples/             streaming applications
 benchmarks/           durable throughput benchmark
 docs/                 implementation design notes

@@ -9,7 +9,7 @@ dist/
 website/.docusaurus/
 website/build/
 website/node_modules/
-temporal-code-state/
-temporal-code-objects/
-temporal-code-rust-state/
-temporal-code-rust-objects/
+highwater-state/
+highwater-objects/
+highwater-rust-state/
+highwater-rust-objects/

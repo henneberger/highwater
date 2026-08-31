@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from temporal_code import (
+from highwater import (
     ActivityError,
     ActivityOptions,
     NonRetryableError,

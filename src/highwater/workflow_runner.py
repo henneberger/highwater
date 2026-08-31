@@ -23,7 +23,7 @@ class WorkflowRunner:
         self.registry = registry
 
     def invoke_handler(self, instance: Any, kind: str, name: str, args: list[Any]) -> Any:
-        workflow_type = getattr(type(instance), "__temporal_code_workflow__")
+        workflow_type = getattr(type(instance), "__highwater_workflow__")
         methods = self.registry.workflow_methods(workflow_type, kind)
         if name not in methods:
             if kind == "signal":

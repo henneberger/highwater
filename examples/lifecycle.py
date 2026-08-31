@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from temporal_code import (
+from highwater import (
     Client,
     WorkflowCancelled,
     WorkflowFailed,

@@ -16,7 +16,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER = ROOT / "target" / "release" / "temporal-code-server"
+SERVER = ROOT / "target" / "release" / "highwater-server"
 RUN_CHAOS = os.environ.get("HIGHWATER_S3_CHAOS") == "1"
 
 
@@ -59,7 +59,7 @@ def request_json(
 class S3ChaosTest(unittest.TestCase):
     def setUp(self) -> None:
         subprocess.run(
-            ["cargo", "build", "--release", "-p", "temporal-code-server"],
+            ["cargo", "build", "--release", "-p", "highwater-server"],
             cwd=ROOT,
             check=True,
         )
@@ -322,7 +322,7 @@ class S3ChaosTest(unittest.TestCase):
             "items": [
                 {
                     "result": {
-                        "__temporal_code_transition__": True,
+                        "__highwater_transition__": True,
                         "state": {"balance": balance},
                         "emit": None,
                     }

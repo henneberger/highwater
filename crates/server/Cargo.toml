@@ -1,5 +1,5 @@
 [package]
-name = "temporal-code-server"
+name = "highwater-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,6 +15,6 @@ reqwest.workspace = true
 rmp-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-temporal-code-protocol = { path = "../protocol" }
+highwater-protocol = { path = "../protocol" }
 tokio.workspace = true
 uuid.workspace = true

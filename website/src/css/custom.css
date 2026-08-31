@@ -28,7 +28,7 @@ html[data-theme='dark'] {
 .navbar { border-bottom: 1px solid var(--ifm-color-emphasis-200); backdrop-filter: blur(18px); box-shadow: none; }
 .navbar__title { font-weight: 650; letter-spacing: -0.02em; }
 .theme-doc-markdown { font-size: 1rem; line-height: 1.72; }
-.theme-doc-markdown h1 { letter-spacing: -0.04em; font-size: clamp(2.3rem, 5vw, 3.5rem); }
+.theme-doc-markdown h1 { letter-spacing: -0.035em; font-size: clamp(2.1rem, 4vw, 2.8rem); }
 .theme-doc-markdown h2 { letter-spacing: -0.025em; }
 .theme-doc-markdown > p:first-of-type { font-size: 1.08rem; color: var(--ifm-color-emphasis-700); }
 .menu__link { font-size: 0.91rem; }

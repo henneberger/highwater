@@ -154,10 +154,10 @@ Customers publish events to Highwater. Connectors, brokers, storage tiers, and p
 The Wikimedia example consumes the public recent-change feed in microbatches and maintains durable per-page activity state:
 
 ```bash
-python -m examples.wikimedia_recent_changes --target "$HIGHWATER_ADDRESS" --duration 60
+python -m examples.wikimedia_recent_changes --target "$HIGHWATER_ADDRESS"
 ```
 
-Its upstream `Last-Event-ID` is committed atomically with each Highwater batch. A restart resumes from the last acknowledged public event rather than from process memory. Set `--duration 0` to keep it running.
+Its upstream `Last-Event-ID` is committed atomically with each Highwater batch. A restart resumes from the last acknowledged public event rather than from process memory. The terminal Process prints each event and discards successful input and activation history; only its bounded per-wiki counters and source checkpoint remain durable. Use `--duration 60` for a bounded run.
 
 ## Execution model
 

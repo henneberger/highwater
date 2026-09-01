@@ -300,6 +300,20 @@ pub(crate) fn finish_process_execution(
             transaction.put(output_key, &output)?;
         }
         process.completed += 1;
+        if process.discard_input_on_success {
+            transaction.delete(stream_record_key(
+                &process.stream,
+                execution.record.partition,
+                execution.record.offset,
+            ));
+            if let Some(event_id) = execution.record.event_id.as_deref() {
+                transaction.delete(stream_event_id_key(&process.stream, event_id));
+            }
+            for (event_key, _) in transaction.scan::<Event>(&event_prefix(workflow_id))? {
+                transaction.delete(event_key);
+            }
+            transaction.delete(workflow_key(workflow_id));
+        }
     } else {
         process.failed += 1;
     }
@@ -573,6 +587,7 @@ pub(crate) async fn create_process(
         mailbox_capacity: request.mailbox_capacity,
         retry_concurrency: request.retry_concurrency,
         max_attempts: request.max_attempts,
+        discard_input_on_success: request.discard_input_on_success,
         batch_max_size: request.batch_max_size,
         batch_max_delay: request.batch_max_delay,
         status: "ACTIVE".to_owned(),
@@ -627,6 +642,7 @@ pub(crate) async fn create_process(
                 existing.mailbox_capacity = process.mailbox_capacity;
                 existing.retry_concurrency = process.retry_concurrency;
                 existing.max_attempts = process.max_attempts;
+                existing.discard_input_on_success = process.discard_input_on_success;
                 existing.batch_max_size = process.batch_max_size;
                 existing.batch_max_delay = process.batch_max_delay;
                 transaction.put(&storage_key, &existing)?;

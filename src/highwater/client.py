@@ -637,6 +637,7 @@ class Client:
                 "mailbox_capacity": spec.capacity,
                 "retry_concurrency": spec.retry_concurrency,
                 "max_attempts": spec.max_attempts,
+                "discard_input_on_success": spec.discard_input_on_success,
                 "batch_max_size": spec.batch_size,
                 "batch_max_delay": spec.batch_delay,
             })
@@ -755,6 +756,7 @@ class Client:
             capacity=selected.capacity,
             retry_concurrency=selected.retry_concurrency,
             max_attempts=selected.max_attempts,
+            discard_input_on_success=selected.discard_input_on_success,
             batch_size=batch_size,
             batch_delay=batch_delay,
             task_queue=selected.task_queue,

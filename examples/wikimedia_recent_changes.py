@@ -16,7 +16,7 @@ from highwater import Client, ProcessOptions, StreamOptions, WatermarkMode, stre
 
 FEED_URL = "https://stream.wikimedia.org/v2/stream/recentchange"
 INPUT_STREAM = "wikimedia-recent-changes"
-PROCESS_ID = "wikimedia-page-activity"
+PROCESS_ID = "wikimedia-public-print"
 SOURCE_ID = "wikimedia-eventstreams-v1"
 USER_AGENT = "HighwaterDemo/0.0.2 (https://highwater.cloud)"
 
@@ -35,33 +35,34 @@ class RecentChange:
 
 
 @streaming.process(
-    key="page_key",
+    key="wiki",
     event_time="occurred_at",
-    build_id="wikimedia-page-activity-v1",
+    build_id="wikimedia-print-sink-v1",
 )
 @dataclass
-class WikimediaPageActivity:
+class WikimediaPrintSink:
     changes: int = 0
-    bytes_changed: int = 0
-    last_change_type: str = ""
     last_changed_at: float = 0.0
 
     @streaming.event
     async def observe(self, event: RecentChange):
         self.changes += 1
-        self.bytes_changed += event.length_delta
-        self.last_change_type = event.change_type
         self.last_changed_at = event.occurred_at
-        return {
-            "page_key": event.page_key,
+        print(json.dumps({
+            "stream": INPUT_STREAM,
+            "event_id": event.event_id,
             "wiki": event.wiki,
             "title": event.title,
-            "changes": self.changes,
-            "bytes_changed": self.bytes_changed,
-            "last_change_type": self.last_change_type,
-            "last_changed_at": self.last_changed_at,
+            "type": event.change_type,
+            "event_time": event.occurred_at,
+            "length_delta": event.length_delta,
+            "bot": event.bot,
             "url": event.url,
-        }
+        }, separators=(",", ":")), flush=True)
+        return streaming.transition(state={
+            "changes": self.changes,
+            "last_changed_at": self.last_changed_at,
+        })
 
 
 def _read_sse_event(response: BinaryIO) -> tuple[str, dict] | None:
@@ -143,15 +144,16 @@ async def deploy(client: Client) -> None:
             ),
         )
     await client.deploy_process(
-        WikimediaPageActivity,
+        WikimediaPrintSink,
         input=INPUT_STREAM,
         process_id=PROCESS_ID,
         options=ProcessOptions(
-            key="page_key",
+            key="wiki",
             max_concurrency=512,
             capacity=100_000,
             retry_concurrency=16,
             max_attempts=5,
+            discard_input_on_success=True,
             batch_size=256,
             batch_delay=0.01,
             task_queue="public-streams",
@@ -200,7 +202,7 @@ async def run(client: Client, *, duration: float, batch_size: int, batch_delay: 
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="http://127.0.0.1:7233")
-    parser.add_argument("--duration", type=float, default=60.0)
+    parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--batch-delay", type=float, default=0.25)
     args = parser.parse_args()

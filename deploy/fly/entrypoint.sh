@@ -21,8 +21,8 @@ highwater-server \
 server_pid=$!
 
 stop() {
-  kill -TERM "$server_pid" "${worker_pid:-}" "${source_pid:-}" 2>/dev/null || true
-  wait "$server_pid" "${worker_pid:-}" "${source_pid:-}" 2>/dev/null || true
+  kill -TERM "$server_pid" "${worker_pid:-}" "${source_pid:-}" "${public_source_pid:-}" 2>/dev/null || true
+  wait "$server_pid" "${worker_pid:-}" "${source_pid:-}" "${public_source_pid:-}" 2>/dev/null || true
 }
 trap stop EXIT INT TERM
 
@@ -51,9 +51,15 @@ HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
   --target http://127.0.0.1:8080 &
 source_pid=$!
 
+HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
+  python -m examples.wikimedia_recent_changes \
+  --target http://127.0.0.1:8080 &
+public_source_pid=$!
+
 while kill -0 "$server_pid" 2>/dev/null \
   && kill -0 "$worker_pid" 2>/dev/null \
-  && kill -0 "$source_pid" 2>/dev/null; do
+  && kill -0 "$source_pid" 2>/dev/null \
+  && kill -0 "$public_source_pid" 2>/dev/null; do
   sleep 1
 done
 exit 1

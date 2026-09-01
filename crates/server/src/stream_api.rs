@@ -294,6 +294,14 @@ pub(crate) fn record_stream_batch(
     stream: &str,
     responses: &[Value],
 ) -> Result<()> {
+    for (_, process_id) in transaction.scan::<String>(&process_stream_prefix(stream))? {
+        if transaction
+            .get::<DurableProcess>(&process_key(&process_id))?
+            .is_some_and(|process| process.discard_input_on_success)
+        {
+            return Ok(());
+        }
+    }
     let sequences = responses
         .iter()
         .filter(|response| response["disposition"] != "duplicate")

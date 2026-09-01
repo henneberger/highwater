@@ -291,6 +291,8 @@ pub(crate) struct CreateProcessRequest {
     pub(crate) retry_concurrency: u32,
     #[serde(default = "default_process_max_attempts")]
     pub(crate) max_attempts: u32,
+    #[serde(default)]
+    pub(crate) discard_input_on_success: bool,
     #[serde(default = "default_process_batch_size")]
     pub(crate) batch_max_size: u32,
     #[serde(default = "default_process_batch_delay")]
@@ -402,6 +404,8 @@ pub(crate) struct DurableProcess {
     pub(crate) retry_concurrency: u32,
     #[serde(default = "default_process_max_attempts")]
     pub(crate) max_attempts: u32,
+    #[serde(default)]
+    pub(crate) discard_input_on_success: bool,
     pub(crate) batch_max_size: u32,
     pub(crate) batch_max_delay: f64,
     pub(crate) status: String,

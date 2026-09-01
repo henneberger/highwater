@@ -163,6 +163,7 @@ class ProcessSpec:
     capacity: int = 10_000
     retry_concurrency: int = 8
     max_attempts: int = 5
+    discard_input_on_success: bool = False
     batch_size: int = 64
     batch_delay: float = 0.005
     task_queue: str = "default"
@@ -203,6 +204,7 @@ class ProcessOptions:
     capacity: int = 10_000
     retry_concurrency: int = 8
     max_attempts: int = 5
+    discard_input_on_success: bool = False
     batch_size: int | None = None
     batch_delay: float | None = None
     task_queue: str = "default"

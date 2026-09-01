@@ -27,7 +27,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Configure native build
-        run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+        run: |
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - name: Build CLI
         run: cargo build --release --locked --package highwater-cli
       - name: Package CLI

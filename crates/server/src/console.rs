@@ -1,21 +1,24 @@
 use crate::*;
 
+const OVERVIEW_WORKFLOW_LIMIT: usize = 100;
+const OVERVIEW_WORKFLOW_SCAN_LIMIT: usize = 500;
+
 pub(crate) async fn console_overview(
     State(app): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut workflows = app
         .store
-        .scan::<WorkflowRecord>("workflow/")?
+        .scan_limit::<WorkflowRecord>("workflow/", OVERVIEW_WORKFLOW_SCAN_LIMIT)?
         .into_iter()
         .map(|(_, workflow)| workflow)
         .filter(|workflow| !is_process_activation(workflow))
         .collect::<Vec<_>>();
     workflows.sort_by(|left, right| right.updated_at.total_cmp(&left.updated_at));
-    workflows.truncate(100);
+    workflows.truncate(OVERVIEW_WORKFLOW_LIMIT);
     let workflow_rows = workflows
         .iter()
-        .map(|workflow| workflow_summary(&app, workflow))
-        .collect::<Result<Vec<_>>>()?;
+        .map(workflow_overview_summary)
+        .collect::<Vec<_>>();
 
     let stream_rows = stream_summaries(&app)?;
     let process_rows = process_summaries(&app)?;
@@ -207,14 +210,8 @@ fn temporal_join_trace(app: &AppState, workflow_id: &str) -> Result<Option<Value
     Ok(None)
 }
 
-fn workflow_summary(app: &AppState, workflow: &WorkflowRecord) -> Result<Value> {
-    let events = app
-        .store
-        .scan::<Event>(&event_prefix(&workflow.workflow_id))?
-        .into_iter()
-        .map(|(_, event)| event)
-        .collect::<Vec<_>>();
-    Ok(workflow_summary_from_events(workflow, &events))
+fn workflow_overview_summary(workflow: &WorkflowRecord) -> Value {
+    workflow_summary(workflow, 0, 0)
 }
 
 fn workflow_summary_from_events(workflow: &WorkflowRecord, events: &[Event]) -> Value {
@@ -227,6 +224,10 @@ fn workflow_summary_from_events(workflow: &WorkflowRecord, events: &[Event]) -> 
             )
         })
         .count();
+    workflow_summary(workflow, events.len(), retries)
+}
+
+fn workflow_summary(workflow: &WorkflowRecord, history_events: usize, retries: usize) -> Value {
     json!({
         "workflow_id": workflow.workflow_id,
         "workflow_type": workflow.workflow_type,
@@ -238,7 +239,7 @@ fn workflow_summary_from_events(workflow: &WorkflowRecord, events: &[Event]) -> 
         "created_at": workflow.created_at,
         "updated_at": workflow.updated_at,
         "duration_seconds": workflow.updated_at - workflow.created_at,
-        "history_events": events.len(),
+        "history_events": history_events,
         "retries": retries,
         "result": workflow.result,
         "error": workflow.error,
@@ -337,10 +338,7 @@ fn operator_summaries(app: &AppState) -> Result<Vec<Value>> {
     for (_, operator) in app.store.scan::<TemporalJoin>("temporal-join/")? {
         let latest_output = app
             .store
-            .scan::<TemporalJoinOutput>(&temporal_join_output_prefix(&operator.join_id))?
-            .into_iter()
-            .map(|(_, output)| output)
-            .max_by_key(|output| output.probe.sequence);
+            .get::<TemporalJoinOutput>(&temporal_join_latest_output_key(&operator.join_id))?;
         let probe_watermark = app
             .store
             .get::<StreamState>(&stream_state_key(&operator.probe_stream))?

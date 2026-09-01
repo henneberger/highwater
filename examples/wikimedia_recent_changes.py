@@ -37,7 +37,7 @@ class RecentChange:
 @streaming.process(
     key="wiki",
     event_time="occurred_at",
-    build_id="wikimedia-print-sink-v1",
+    build_id="wikimedia-print-sink-v2",
 )
 @dataclass
 class WikimediaPrintSink:
@@ -48,17 +48,19 @@ class WikimediaPrintSink:
     async def observe(self, event: RecentChange):
         self.changes += 1
         self.last_changed_at = event.occurred_at
-        print(json.dumps({
-            "stream": INPUT_STREAM,
-            "event_id": event.event_id,
-            "wiki": event.wiki,
-            "title": event.title,
-            "type": event.change_type,
-            "event_time": event.occurred_at,
-            "length_delta": event.length_delta,
-            "bot": event.bot,
-            "url": event.url,
-        }, separators=(",", ":")), flush=True)
+        if self.changes % 100 == 0:
+            print(json.dumps({
+                "stream": INPUT_STREAM,
+                "events_processed_for_key": self.changes,
+                "event_id": event.event_id,
+                "wiki": event.wiki,
+                "title": event.title,
+                "type": event.change_type,
+                "event_time": event.occurred_at,
+                "length_delta": event.length_delta,
+                "bot": event.bot,
+                "url": event.url,
+            }, separators=(",", ":")), flush=True)
         return streaming.transition(state={
             "changes": self.changes,
             "last_changed_at": self.last_changed_at,

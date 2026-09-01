@@ -333,6 +333,7 @@ pub(crate) fn refresh_temporal_joins(
             }
             join.probes_emitted += 1;
             transaction.put(temporal_join_output_key(&join.join_id, &probe), &output)?;
+            transaction.put(temporal_join_latest_output_key(&join.join_id), &output)?;
             if join.join_type == TemporalJoinType::Left || output.version.is_some() {
                 append_operator_change(
                     transaction,

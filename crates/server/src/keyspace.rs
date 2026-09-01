@@ -295,6 +295,9 @@ pub(crate) fn temporal_join_output_key(join_id: &str, record: &StreamRecord) -> 
         record.offset,
     )
 }
+pub(crate) fn temporal_join_latest_output_key(join_id: &str) -> String {
+    format!("temporal-join-latest-output/{}", encoded(join_id))
+}
 pub(crate) fn interval_join_key(join_id: &str) -> String {
     format!("interval-join/{}", encoded(join_id))
 }

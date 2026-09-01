@@ -60,13 +60,27 @@ pub(crate) fn recover_process_tasks(app: &AppState, recover_orphans: bool) -> Re
                 if lease.lease_expires > now() && !(recover_orphans && orphaned) {
                     continue;
                 }
-                for ready_execution in lease.executions {
-                    let execution = &ready_execution.execution;
+                let state_key = process_shard_state_key(&lease.process_id, shard);
+                let mut shard_state = transaction
+                    .get::<ProcessShardState>(&state_key)?
+                    .unwrap_or_default();
+                for mut ready_execution in lease.executions {
+                    let execution = &mut ready_execution.execution;
+                    if execution.attempt > 0 {
+                        if execution.isolated_retry {
+                            shard_state.retry_running = shard_state.retry_running.saturating_sub(1);
+                        } else {
+                            shard_state.running = shard_state.running.saturating_sub(1);
+                            execution.isolated_retry = true;
+                        }
+                        shard_state.retry_pending += 1;
+                    }
                     transaction.put(
                         process_ready_key(shard, &execution.process_id, execution.sequence),
                         &ready_execution,
                     )?;
                 }
+                transaction.put(&state_key, &shard_state)?;
                 transaction.delete(lease_key);
             }
             Ok(())
@@ -373,7 +387,20 @@ pub(crate) async fn transfer_process_partition(
             if lease.shard != partition {
                 continue;
             }
-            for execution in lease.executions {
+            let state_key = process_shard_state_key(&lease.process_id, shard);
+            let mut shard_state = transaction
+                .get::<ProcessShardState>(&state_key)?
+                .unwrap_or_default();
+            for mut execution in lease.executions {
+                if execution.execution.attempt > 0 {
+                    if execution.execution.isolated_retry {
+                        shard_state.retry_running = shard_state.retry_running.saturating_sub(1);
+                    } else {
+                        shard_state.running = shard_state.running.saturating_sub(1);
+                        execution.execution.isolated_retry = true;
+                    }
+                    shard_state.retry_pending += 1;
+                }
                 transaction.put(
                     process_ready_key(
                         shard,
@@ -383,6 +410,7 @@ pub(crate) async fn transfer_process_partition(
                     &execution,
                 )?;
             }
+            transaction.put(&state_key, &shard_state)?;
             transaction.delete(lease_key);
         }
         Ok(())

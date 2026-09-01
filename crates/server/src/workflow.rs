@@ -885,6 +885,48 @@ pub(crate) fn apply_workflow_completion(
             "WORKFLOW_TASK_FAILED",
             json!({"error": failure, "attempt": task.attempt}),
         )?;
+        if let Some(mut execution) =
+            transaction.get::<ProcessExecution>(&process_execution_key(&workflow_id))?
+        {
+            let storage_key = process_key(&execution.process_id);
+            let mut process = transaction
+                .get::<DurableProcess>(&storage_key)?
+                .ok_or_else(|| anyhow!("process missing: {}", execution.process_id))?;
+            if execution.attempt == 0 {
+                process.running = process.running.saturating_sub(1);
+                process.retrying += 1;
+            }
+            execution.attempt = task.attempt;
+            execution.last_failure = Some(failure.clone());
+            transaction.put(process_execution_key(&workflow_id), &execution)?;
+            if process_failure_disposition(task.attempt, process.max_attempts)
+                == ProcessFailureDisposition::Quarantine
+            {
+                transaction.put(
+                    process_quarantine_key(
+                        &execution.process_id,
+                        execution.shard as usize,
+                        execution.record.sequence,
+                    ),
+                    &ProcessQuarantineRecord {
+                        process_id: execution.process_id.clone(),
+                        key: execution.key.clone(),
+                        sequence: execution.record.sequence,
+                        event_time: execution.event_time,
+                        record: execution.record.clone(),
+                        attempts: task.attempt,
+                        failure: failure.clone(),
+                        quarantined_at: now(),
+                    },
+                )?;
+                process.quarantined += 1;
+                transaction.put(&storage_key, &process)?;
+                transaction.delete(key);
+                close_workflow(transaction, &workflow_id, "FAILED", None, Some(failure))?;
+                return Ok(());
+            }
+            transaction.put(storage_key, &process)?;
+        }
         let mut retry = task;
         retry.lease_owner = None;
         retry.lease_expires = None;

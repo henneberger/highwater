@@ -30,7 +30,7 @@ Filters preserve the input row kind and signed difference. Interval joins mainta
 
 `EventTimeGate.IMMEDIATE` dispatches as soon as capacity permits. `EventTimeGate.COMPLETE` dispatches only after the input completeness frontier passes the event timestamp, providing an understandable “run when this event time is final” gate without exposing watermark arithmetic. Sealing bounded input releases all remaining events. Source-managed connectors should continue emitting watermarks even while data admission is backpressured, because progress messages are intentionally not subject to mailbox capacity.
 
-Mailbox admission and source cursor advancement happen in the same transaction. `pending + running == capacity` returns retryable HTTP 429; `StreamWriter` pauses and retries without advancing its durable offset. Fenced invocation leases prevent concurrent handler commits, and the active-key permit is released in the same commit that stores the result state and schedules the next item. Failed, cancelled, terminated, and timed-out handlers leave prior state unchanged, release the key, and increment the failure count.
+Mailbox admission and source cursor advancement happen in the same transaction. Reaching capacity returns retryable HTTP 429; `StreamWriter` pauses without advancing its durable offset. Fenced invocation leases prevent concurrent handler commits. A failed transition leaves prior state unchanged and moves into a separately bounded retry lane, so it preserves ordering for its key without consuming normal-key concurrency. Batch failures are isolated to individual inputs. After `max_attempts`, the input is durably available from `/processes/{process_id}/quarantine`, its key is released, and processing continues.
 
 ## Distributed checkpoints
 

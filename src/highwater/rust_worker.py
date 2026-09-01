@@ -233,21 +233,7 @@ class RustWorker:
             for offset in range(0, len(envelopes), max_size):
                 chunk = envelopes[offset:offset + max_size]
                 batch_run = getattr(definition, "__highwater_process_batch_run__", None)
-                try:
-                    if batch_run is not None:
-                        results = await batch_run(definition(), chunk)
-                    else:
-                        run = getattr(definition, "__highwater_process_run__")
-                        results = await asyncio.gather(*(
-                            run(definition(), envelope) for envelope in chunk
-                        ))
-                except Exception as error:
-                    failure = "".join(
-                        traceback.format_exception_only(type(error), error)
-                    ).strip()
-                    items.extend({"failure": failure} for _ in chunk)
-                else:
-                    items.extend({"result": result} for result in results)
+                items.extend(await self._execute_process_chunk(definition, chunk, batch_run))
             completions.append({
                 "protocol_version": 1,
                 "lease_token": batch["lease_token"],
@@ -273,6 +259,40 @@ class RustWorker:
                 stop.set()
             await asyncio.gather(*renewal_tasks, return_exceptions=True)
         return True
+
+    async def _execute_process_chunk(
+        self,
+        definition: type[Any],
+        envelopes: list[dict[str, Any]],
+        batch_run: Any,
+    ) -> list[dict[str, Any]]:
+        if batch_run is None:
+            run = getattr(definition, "__highwater_process_run__")
+
+            async def execute(envelope: dict[str, Any]) -> dict[str, Any]:
+                try:
+                    return {"result": await run(definition(), envelope)}
+                except Exception as error:
+                    return {"failure": "".join(
+                        traceback.format_exception_only(type(error), error)
+                    ).strip()}
+
+            return await asyncio.gather(*(execute(envelope) for envelope in envelopes))
+
+        try:
+            results = await batch_run(definition(), envelopes)
+            return [{"result": result} for result in results]
+        except Exception as error:
+            if len(envelopes) == 1:
+                return [{"failure": "".join(
+                    traceback.format_exception_only(type(error), error)
+                ).strip()}]
+            middle = len(envelopes) // 2
+            left, right = await asyncio.gather(
+                self._execute_process_chunk(definition, envelopes[:middle], batch_run),
+                self._execute_process_chunk(definition, envelopes[middle:], batch_run),
+            )
+            return left + right
 
     async def _renew_process_batch(
         self,

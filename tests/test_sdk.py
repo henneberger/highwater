@@ -30,6 +30,7 @@ from highwater import (
     streaming,
 )
 from highwater.workflow_runner import WorkflowRunner
+from highwater.rust_worker import RustWorker
 
 
 class SdkTest(unittest.TestCase):
@@ -235,6 +236,8 @@ class SdkTest(unittest.TestCase):
             "event_time_gate": EventTimeGate.COMPLETE,
             "max_concurrent_keys": 8,
             "mailbox_capacity": 100,
+            "retry_concurrency": 8,
+            "max_attempts": 5,
             "batch_max_size": 64,
             "batch_max_delay": 0.005,
         })
@@ -362,6 +365,33 @@ class SdkTest(unittest.TestCase):
         )
         self.assertEqual(Embeddings.__highwater_batch_max_size__, 32)
         self.assertEqual(Embeddings.__highwater_batch_max_delay__, 0.02)
+
+    def test_process_batch_isolates_poison_event(self):
+        class BatchProcess:
+            calls = []
+
+            @staticmethod
+            async def batch_run(_instance, envelopes):
+                keys = [envelope["key"] for envelope in envelopes]
+                BatchProcess.calls.append(keys)
+                if "poison" in keys:
+                    raise ValueError("bad event")
+                return [{"key": key} for key in keys]
+
+        worker = RustWorker(Registry())
+        envelopes = [{"key": key} for key in ["a", "poison", "b", "c"]]
+
+        results = asyncio.run(worker._execute_process_chunk(
+            BatchProcess,
+            envelopes,
+            BatchProcess.batch_run,
+        ))
+
+        self.assertEqual(results[0], {"result": {"key": "a"}})
+        self.assertIn("ValueError: bad event", results[1]["failure"])
+        self.assertEqual(results[2], {"result": {"key": "b"}})
+        self.assertEqual(results[3], {"result": {"key": "c"}})
+        self.assertGreater(len(BatchProcess.calls), 1)
 
     def test_process_handle_extracts_key_and_hides_stream_publish(self):
         @streaming.process

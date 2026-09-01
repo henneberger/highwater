@@ -17,12 +17,12 @@ pub(crate) fn ensure_process_capacity(transaction: &Transaction<'_>, stream: &st
             .ok_or_else(|| anyhow!("indexed process missing: {process_id}"))?;
         if process.status == "ACTIVE"
             && process.stream == stream
-            && process.pending + process.running >= process.mailbox_capacity
+            && process.pending + process.running + process.retrying >= process.mailbox_capacity
         {
             return Err(StreamCapacityError(format!(
                 "process {} mailbox is full ({}/{})",
                 process.process_id,
-                process.pending + process.running,
+                process.pending + process.running + process.retrying,
                 process.mailbox_capacity,
             ))
             .into());
@@ -234,7 +234,11 @@ pub(crate) fn finish_process_execution(
         .ok_or_else(|| anyhow!("process missing: {}", execution.process_id))?;
     transaction.delete(process_active_key(&execution.process_id, &execution.key));
     transaction.delete(execution_key);
-    process.running = process.running.saturating_sub(1);
+    if execution.attempt == 0 {
+        process.running = process.running.saturating_sub(1);
+    } else {
+        process.retrying = process.retrying.saturating_sub(1);
+    }
     if status == "COMPLETED" {
         let returned = result.cloned().unwrap_or(Value::Null);
         let transition = returned
@@ -347,6 +351,38 @@ fn sharded_process_concurrency(process: &DurableProcess, data_shards: usize) -> 
         .max(1)
 }
 
+fn sharded_retry_concurrency(process: &DurableProcess, data_shards: usize) -> usize {
+    let shard_count = data_shards.max(1) as u32;
+    usize::try_from(u64::from(process.retry_concurrency).div_ceil(u64::from(shard_count)))
+        .unwrap_or(usize::MAX)
+        .max(1)
+}
+
+fn release_process_execution(shard_state: &mut ProcessShardState, isolated_retry: bool) {
+    if isolated_retry {
+        shard_state.retry_running = shard_state.retry_running.saturating_sub(1);
+    } else {
+        shard_state.running = shard_state.running.saturating_sub(1);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProcessFailureDisposition {
+    Retry,
+    Quarantine,
+}
+
+pub(crate) fn process_failure_disposition(
+    attempt: u32,
+    max_attempts: u32,
+) -> ProcessFailureDisposition {
+    if attempt >= max_attempts {
+        ProcessFailureDisposition::Quarantine
+    } else {
+        ProcessFailureDisposition::Retry
+    }
+}
+
 fn start_sharded_process_execution(
     transaction: &mut Transaction<'_>,
     process: &DurableProcess,
@@ -368,6 +404,7 @@ fn start_sharded_process_execution(
         available_at: timestamp,
         enqueued_at: timestamp,
         attempt: 0,
+        isolated_retry: false,
         lease_owner: None,
         lease_expires: None,
         task_token: None,
@@ -490,7 +527,7 @@ pub(crate) fn finish_sharded_process_execution(
         )?;
     }
     shard_state.active_keys.remove(&execution.key);
-    shard_state.running = shard_state.running.saturating_sub(1);
+    release_process_execution(shard_state, execution.isolated_retry);
     shard_state.completed += 1;
     Ok(())
 }
@@ -511,13 +548,15 @@ pub(crate) async fn create_process(
     if request.state_version == 0
         || request.max_concurrent_keys == 0
         || request.mailbox_capacity == 0
+        || request.retry_concurrency == 0
+        || request.max_attempts == 0
         || request.batch_max_size == 0
         || request.batch_max_size > 16_384
         || !request.batch_max_delay.is_finite()
         || request.batch_max_delay < 0.0
     {
         return Err(ApiError(anyhow!(
-            "process state version, concurrency, capacity, and batch settings are invalid"
+            "process state version, concurrency, retry policy, capacity, and batch settings are invalid"
         )));
     }
     let mut process = DurableProcess {
@@ -532,6 +571,8 @@ pub(crate) async fn create_process(
         event_time_gate: request.event_time_gate,
         max_concurrent_keys: request.max_concurrent_keys,
         mailbox_capacity: request.mailbox_capacity,
+        retry_concurrency: request.retry_concurrency,
+        max_attempts: request.max_attempts,
         batch_max_size: request.batch_max_size,
         batch_max_delay: request.batch_max_delay,
         status: "ACTIVE".to_owned(),
@@ -540,6 +581,8 @@ pub(crate) async fn create_process(
         running: 0,
         completed: 0,
         failed: 0,
+        retrying: 0,
+        quarantined: 0,
     };
     let process_id = process.process_id.clone();
     let mut created = false;
@@ -582,6 +625,8 @@ pub(crate) async fn create_process(
                 existing.task_queue = process.task_queue.clone();
                 existing.max_concurrent_keys = process.max_concurrent_keys;
                 existing.mailbox_capacity = process.mailbox_capacity;
+                existing.retry_concurrency = process.retry_concurrency;
+                existing.max_attempts = process.max_attempts;
                 existing.batch_max_size = process.batch_max_size;
                 existing.batch_max_delay = process.batch_max_delay;
                 transaction.put(&storage_key, &existing)?;
@@ -714,7 +759,13 @@ pub(crate) fn append_process_shard_records(
     let capacity = process
         .mailbox_capacity
         .div_ceil(u64::try_from(data_shards)?);
-    if shard_state.pending + shard_state.running + new_records > capacity {
+    if shard_state.pending
+        + shard_state.running
+        + shard_state.retry_pending
+        + shard_state.retry_running
+        + new_records
+        > capacity
+    {
         return Err(StreamCapacityError(format!(
             "process {process_id} shard {shard} mailbox is full"
         ))
@@ -1257,6 +1308,7 @@ pub(crate) fn poll_process_partition(
     shard: usize,
     request: PollRequest,
 ) -> Result<Option<ProcessActivationBatch>> {
+    let data_shards = app.shard_locks.len().saturating_sub(1).max(1);
     let mut activation_batch = None;
     app.commit_shard(shard, |transaction| {
         let timestamp = now();
@@ -1311,7 +1363,34 @@ pub(crate) fn poll_process_partition(
         let lease_expires = timestamp + request.lease_seconds;
         let mut executions = Vec::new();
         let mut envelopes = Vec::new();
-        let selected: Vec<_> = candidates.into_iter().take(max_size).collect();
+        let state_key = process_shard_state_key(&process_id, shard);
+        let mut shard_state = transaction
+            .get::<ProcessShardState>(&state_key)?
+            .unwrap_or_default();
+        let retry_slots = sharded_retry_concurrency(process, data_shards)
+            .saturating_sub(usize::try_from(shard_state.retry_running).unwrap_or(usize::MAX));
+        let mut selected = Vec::with_capacity(max_size);
+        let mut selected_retries = 0_usize;
+        for mut candidate in candidates {
+            let is_retry = candidate.2.execution.attempt > 0;
+            if is_retry && selected_retries >= retry_slots {
+                continue;
+            }
+            if is_retry {
+                selected_retries += 1;
+                if !candidate.2.execution.isolated_retry {
+                    shard_state.running = shard_state.running.saturating_sub(1);
+                    candidate.2.execution.isolated_retry = true;
+                }
+            }
+            selected.push(candidate);
+            if selected.len() == max_size {
+                break;
+            }
+        }
+        if selected.is_empty() {
+            return Ok(());
+        }
         let contiguous = selected.windows(2).all(|pair| pair[1].0 == pair[0].0 + 1);
         if contiguous {
             let first_key = &selected[0].1;
@@ -1334,6 +1413,11 @@ pub(crate) fn poll_process_partition(
             executions.push(ready_execution);
         }
         if !executions.is_empty() {
+            shard_state.retry_pending = shard_state
+                .retry_pending
+                .saturating_sub(u64::try_from(selected_retries)?);
+            shard_state.retry_running += u64::try_from(selected_retries)?;
+            transaction.put(&state_key, &shard_state)?;
             transaction.put(
                 process_batch_lease_key(&token),
                 &ProcessBatchLease {
@@ -1458,18 +1542,42 @@ pub(crate) fn complete_process_partition(
                 bail!("process task lease lost");
             }
             if let Some(failure) = item.failure {
+                release_process_execution(&mut shard_state, execution.isolated_retry);
                 execution.attempt += 1;
-                execution.available_at = now()
-                    + (0.1 * 2f64.powi((execution.attempt.saturating_sub(1)) as i32)).min(5.0);
-                execution.enqueued_at = execution.available_at;
-                execution.last_failure = Some(failure);
-                transaction.put(
-                    process_ready_key(shard, &process_id, execution.sequence),
-                    &ProcessReadyExecution {
-                        execution_key: execution_key.clone(),
-                        execution,
-                    },
-                )?;
+                if process_failure_disposition(execution.attempt, process.max_attempts)
+                    == ProcessFailureDisposition::Quarantine
+                {
+                    transaction.put(
+                        process_quarantine_key(&process_id, shard, execution.sequence),
+                        &ProcessQuarantineRecord {
+                            process_id: process_id.clone(),
+                            key: execution.key.clone(),
+                            sequence: execution.sequence,
+                            event_time: execution.event_time,
+                            record: execution.record.clone(),
+                            attempts: execution.attempt,
+                            failure,
+                            quarantined_at: now(),
+                        },
+                    )?;
+                    shard_state.active_keys.remove(&execution.key);
+                    shard_state.failed += 1;
+                    shard_state.quarantined += 1;
+                } else {
+                    execution.isolated_retry = true;
+                    execution.available_at = now()
+                        + (0.1 * 2f64.powi((execution.attempt.saturating_sub(1)) as i32)).min(5.0);
+                    execution.enqueued_at = execution.available_at;
+                    execution.last_failure = Some(failure);
+                    transaction.put(
+                        process_ready_key(shard, &process_id, execution.sequence),
+                        &ProcessReadyExecution {
+                            execution_key: execution_key.clone(),
+                            execution,
+                        },
+                    )?;
+                    shard_state.retry_pending += 1;
+                }
                 continue;
             }
             finish_sharded_process_execution(
@@ -1566,8 +1674,30 @@ pub(crate) async fn get_process(
         process.running += shard.running;
         process.completed += shard.completed;
         process.failed += shard.failed;
+        process.retrying += shard.retry_pending + shard.retry_running;
+        process.quarantined += shard.quarantined;
     }
     Ok(Json(process))
+}
+
+pub(crate) async fn get_process_quarantine(
+    State(app): State<AppState>,
+    Path(process_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if app
+        .store
+        .get::<DurableProcess>(&process_key(&process_id))?
+        .is_none()
+    {
+        return Err(ApiError(anyhow!("process not found: {process_id}")));
+    }
+    let records = app
+        .store
+        .scan::<ProcessQuarantineRecord>(&process_quarantine_prefix(&process_id))?
+        .into_iter()
+        .map(|(_, record)| record)
+        .collect::<Vec<_>>();
+    Ok(Json(records))
 }
 
 pub(crate) async fn get_process_state(
@@ -1643,4 +1773,33 @@ pub(crate) async fn get_operator_edge(
             .get::<OperatorEdge>(&operator_edge_key(&operator_id))?
             .ok_or_else(|| anyhow!("operator edge not found: {operator_id}"))?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_leave_normal_concurrency_and_respect_budget() {
+        let mut state = ProcessShardState {
+            running: 1,
+            retry_running: 1,
+            ..ProcessShardState::default()
+        };
+
+        release_process_execution(&mut state, false);
+        assert_eq!(state.running, 0);
+        assert_eq!(state.retry_running, 1);
+        release_process_execution(&mut state, true);
+        assert_eq!(state.running, 0);
+        assert_eq!(state.retry_running, 0);
+        assert_eq!(
+            process_failure_disposition(4, 5),
+            ProcessFailureDisposition::Retry
+        );
+        assert_eq!(
+            process_failure_disposition(5, 5),
+            ProcessFailureDisposition::Quarantine
+        );
+    }
 }

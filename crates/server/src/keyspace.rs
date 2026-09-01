@@ -190,6 +190,15 @@ pub(crate) fn process_state_key(process_id: &str, key: &str) -> String {
 pub(crate) fn process_output_key(process_id: &str, key: &str) -> String {
     format!("process-output/{}/{}", encoded(process_id), encoded(key))
 }
+pub(crate) fn process_quarantine_prefix(process_id: &str) -> String {
+    format!("process-quarantine/{}/", encoded(process_id))
+}
+pub(crate) fn process_quarantine_key(process_id: &str, shard: usize, sequence: u64) -> String {
+    format!(
+        "{}{shard:04}/{sequence:020}",
+        process_quarantine_prefix(process_id)
+    )
+}
 
 pub(crate) fn append_operator_change(
     transaction: &mut Transaction<'_>,

@@ -345,6 +345,10 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
         .route("/processes", post(create_process))
         .route("/processes/{process_id}", get(get_process))
         .route(
+            "/processes/{process_id}/quarantine",
+            get(get_process_quarantine),
+        )
+        .route(
             "/processes/{process_id}/events",
             post(append_process_records),
         )

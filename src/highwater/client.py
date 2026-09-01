@@ -584,6 +584,8 @@ class Client:
                 "event_time_gate": spec.event_time_gate,
                 "max_concurrent_keys": spec.max_concurrency,
                 "mailbox_capacity": spec.capacity,
+                "retry_concurrency": spec.retry_concurrency,
+                "max_attempts": spec.max_attempts,
                 "batch_max_size": spec.batch_size,
                 "batch_max_delay": spec.batch_delay,
             })
@@ -700,6 +702,8 @@ class Client:
             event_time_gate=selected.event_time_gate,
             max_concurrency=selected.max_concurrency,
             capacity=selected.capacity,
+            retry_concurrency=selected.retry_concurrency,
+            max_attempts=selected.max_attempts,
             batch_size=batch_size,
             batch_delay=batch_delay,
             task_queue=selected.task_queue,
@@ -770,6 +774,11 @@ class Client:
     async def process(self, process_id: str) -> dict[str, Any]:
         return await self._request(
             "GET", f"/processes/{quote(process_id, safe='')}",
+        )
+
+    async def process_quarantine(self, process_id: str) -> list[dict[str, Any]]:
+        return await self._request(
+            "GET", f"/processes/{quote(process_id, safe='')}/quarantine",
         )
 
     async def process_state(self, process_id: str, key: str) -> Any:

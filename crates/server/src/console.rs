@@ -305,6 +305,8 @@ fn process_summaries(app: &AppState) -> Result<Vec<Value>> {
             process.running += shard.running;
             process.completed += shard.completed;
             process.failed += shard.failed;
+            process.retrying += shard.retry_pending + shard.retry_running;
+            process.quarantined += shard.quarantined;
         }
         rows.push(json!({
             "process_id": process.process_id,
@@ -316,8 +318,12 @@ fn process_summaries(app: &AppState) -> Result<Vec<Value>> {
             "running": process.running,
             "completed": process.completed,
             "failed": process.failed,
+            "retrying": process.retrying,
+            "quarantined": process.quarantined,
             "max_concurrent_keys": process.max_concurrent_keys,
             "mailbox_capacity": process.mailbox_capacity,
+            "retry_concurrency": process.retry_concurrency,
+            "max_attempts": process.max_attempts,
             "batch_max_size": process.batch_max_size,
             "batch_max_delay": process.batch_max_delay,
             "event_time_gate": process.event_time_gate,

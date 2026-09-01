@@ -108,6 +108,7 @@ events ──► durable inbox ──► Python Process ──► state + output
 - Stable event identifiers make uncertain retries safe.
 - Watermarks let code wait for event-time completeness.
 - Backpressure reaches ingestion before queues become unbounded.
+- Poison events use isolated retry capacity and enter durable quarantine after their retry budget.
 
 ## Streaming that can be batchy
 

@@ -161,6 +161,8 @@ class ProcessSpec:
     event_time_gate: EventTimeGate = EventTimeGate.IMMEDIATE
     max_concurrency: int = 64
     capacity: int = 10_000
+    retry_concurrency: int = 8
+    max_attempts: int = 5
     batch_size: int = 64
     batch_delay: float = 0.005
     task_queue: str = "default"
@@ -170,8 +172,15 @@ class ProcessSpec:
             raise ValueError("process_id, input, and build_id must not be empty")
         if self.state_version <= 0:
             raise ValueError("state_version must be positive")
-        if self.max_concurrency <= 0 or self.capacity <= 0:
-            raise ValueError("max_concurrency and capacity must be positive")
+        if (
+            self.max_concurrency <= 0
+            or self.capacity <= 0
+            or self.retry_concurrency <= 0
+            or self.max_attempts <= 0
+        ):
+            raise ValueError(
+                "max_concurrency, capacity, retry_concurrency, and max_attempts must be positive"
+            )
         if (
             not 1 <= self.batch_size <= 16_384
             or not isfinite(self.batch_delay)
@@ -192,6 +201,8 @@ class ProcessOptions:
     event_time_gate: EventTimeGate = EventTimeGate.IMMEDIATE
     max_concurrency: int = 64
     capacity: int = 10_000
+    retry_concurrency: int = 8
+    max_attempts: int = 5
     batch_size: int | None = None
     batch_delay: float | None = None
     task_queue: str = "default"
@@ -199,8 +210,15 @@ class ProcessOptions:
     def __post_init__(self) -> None:
         if self.key is not None and not self.key.strip():
             raise ValueError("key must not be empty")
-        if self.max_concurrency <= 0 or self.capacity <= 0:
-            raise ValueError("max_concurrency and capacity must be positive")
+        if (
+            self.max_concurrency <= 0
+            or self.capacity <= 0
+            or self.retry_concurrency <= 0
+            or self.max_attempts <= 0
+        ):
+            raise ValueError(
+                "max_concurrency, capacity, retry_concurrency, and max_attempts must be positive"
+            )
         if self.batch_size is not None and not 1 <= self.batch_size <= 16_384:
             raise ValueError("batch_size must be between 1 and 16384")
         if self.batch_delay is not None and (

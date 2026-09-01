@@ -256,6 +256,14 @@ pub(crate) fn default_process_capacity() -> u64 {
     10_000
 }
 
+pub(crate) fn default_process_retry_concurrency() -> u32 {
+    8
+}
+
+pub(crate) fn default_process_max_attempts() -> u32 {
+    5
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateProcessRequest {
     pub(crate) process_id: String,
@@ -277,6 +285,10 @@ pub(crate) struct CreateProcessRequest {
     pub(crate) max_concurrent_keys: u32,
     #[serde(default = "default_process_capacity")]
     pub(crate) mailbox_capacity: u64,
+    #[serde(default = "default_process_retry_concurrency")]
+    pub(crate) retry_concurrency: u32,
+    #[serde(default = "default_process_max_attempts")]
+    pub(crate) max_attempts: u32,
     #[serde(default = "default_process_batch_size")]
     pub(crate) batch_max_size: u32,
     #[serde(default = "default_process_batch_delay")]
@@ -382,6 +394,10 @@ pub(crate) struct DurableProcess {
     pub(crate) event_time_gate: EventTimeGate,
     pub(crate) max_concurrent_keys: u32,
     pub(crate) mailbox_capacity: u64,
+    #[serde(default = "default_process_retry_concurrency")]
+    pub(crate) retry_concurrency: u32,
+    #[serde(default = "default_process_max_attempts")]
+    pub(crate) max_attempts: u32,
     pub(crate) batch_max_size: u32,
     pub(crate) batch_max_delay: f64,
     pub(crate) status: String,
@@ -390,6 +406,10 @@ pub(crate) struct DurableProcess {
     pub(crate) running: u64,
     pub(crate) completed: u64,
     pub(crate) failed: u64,
+    #[serde(default)]
+    pub(crate) retrying: u64,
+    #[serde(default)]
+    pub(crate) quarantined: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +472,8 @@ pub(crate) struct ShardedProcessExecution {
     pub(crate) available_at: f64,
     pub(crate) enqueued_at: f64,
     pub(crate) attempt: u32,
+    #[serde(default)]
+    pub(crate) isolated_retry: bool,
     pub(crate) lease_owner: Option<String>,
     pub(crate) lease_expires: Option<f64>,
     pub(crate) task_token: Option<String>,
@@ -462,6 +484,18 @@ pub(crate) struct ShardedProcessExecution {
 pub(crate) struct ProcessReadyExecution {
     pub(crate) execution_key: String,
     pub(crate) execution: ShardedProcessExecution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProcessQuarantineRecord {
+    pub(crate) process_id: String,
+    pub(crate) key: String,
+    pub(crate) sequence: u64,
+    pub(crate) event_time: f64,
+    pub(crate) record: StreamRecord,
+    pub(crate) attempts: u32,
+    pub(crate) failure: String,
+    pub(crate) quarantined_at: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,6 +519,12 @@ pub(crate) struct ProcessShardState {
     pub(crate) running: u64,
     pub(crate) completed: u64,
     pub(crate) failed: u64,
+    #[serde(default)]
+    pub(crate) retry_pending: u64,
+    #[serde(default)]
+    pub(crate) retry_running: u64,
+    #[serde(default)]
+    pub(crate) quarantined: u64,
     #[serde(default)]
     pub(crate) active_keys: HashSet<String>,
 }

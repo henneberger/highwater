@@ -48,18 +48,20 @@ document.addEventListener("keydown", (event) => {
 });
 
 const copyButton = document.querySelector("[data-copy]");
-copyButton.addEventListener("click", async () => {
-  const label = copyButton.querySelector(".copy-label");
-  try {
-    await navigator.clipboard.writeText(copyButton.dataset.copy);
-    label.textContent = "Copied";
-  } catch {
-    label.textContent = "Select";
-  }
-  window.setTimeout(() => {
-    label.textContent = "Copy";
-  }, 1800);
-});
+if (copyButton) {
+  copyButton.addEventListener("click", async () => {
+    const label = copyButton.querySelector(".copy-label");
+    try {
+      await navigator.clipboard.writeText(copyButton.dataset.copy);
+      label.textContent = "Copied";
+    } catch {
+      label.textContent = "Select";
+    }
+    window.setTimeout(() => {
+      label.textContent = "Copy";
+    }, 1800);
+  });
+}
 
 const header = document.querySelector("[data-header]");
 const updateHeader = () => {

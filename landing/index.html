@@ -30,6 +30,10 @@
         <nav class="nav-links" aria-label="Main navigation">
           <a href="#model">How it works</a>
           <a href="#event-time">Event time</a>
+          <a href="#elastic-compute">Elastic compute</a>
+          <a href="#upgrades">Upgrades</a>
+          <a href="#sandboxing">Sandboxing</a>
+          <a href="#operations">Operations</a>
           <a href="#guarantees">Guarantees</a>
         </nav>
         <div class="nav-actions">
@@ -46,6 +50,10 @@
       <nav class="mobile-nav shell" id="mobile-navigation" aria-label="Mobile navigation" hidden data-mobile-nav>
         <a href="#model">How it works</a>
         <a href="#event-time">Event time</a>
+        <a href="#elastic-compute">Elastic compute</a>
+        <a href="#upgrades">Upgrades</a>
+        <a href="#sandboxing">Sandboxing</a>
+        <a href="#operations">Operations</a>
         <a href="#guarantees">Guarantees</a>
         <a href="#" data-config-link="github">GitHub</a>
         <a href="#" data-config-link="docs">Docs</a>
@@ -67,10 +75,10 @@
         <div class="hero-grid">
           <div class="hero-copy">
             <div class="eyebrow"><span></span> Durable execution for streaming applications</div>
-            <h1>Write stateful streaming applications as ordinary Python.</h1>
+            <h1>Build stateful applications on event streams.</h1>
             <p class="hero-lead">
-              Highwater keeps each key ordered and recovers accepted events, state, and output
-              after failures—with event-time progress built in.
+              Write application logic that reacts to each event and remembers what came before.
+              Highwater runs it with durable state and elastic compute.
             </p>
             <div class="hero-actions">
               <a class="button" href="#access">Get early access <span aria-hidden="true">→</span></a>
@@ -241,7 +249,211 @@
         </div>
       </section>
 
-      <section class="section guarantees-section" id="guarantees" data-section="04 / guarantees">
+      <section class="section elastic-section" id="elastic-compute" data-section="04 / elastic compute">
+        <div class="shell elastic-grid">
+          <div class="elastic-copy">
+            <p class="kicker">Elastic compute</p>
+            <h2>Scale compute with event volume.</h2>
+            <p>
+              Event volume shifts across the day and across keys. Highwater changes the execution
+              capacity assigned to an application as demand grows.
+            </p>
+            <p class="elastic-state-note">
+              Independent Processes can move across workers. Each key keeps its ordering, state,
+              timers, and progress.
+            </p>
+          </div>
+
+          <div class="capacity-console">
+            <div class="capacity-head">
+              <span>Application demand</span>
+              <span class="live-badge"><i></i> live</span>
+            </div>
+            <div class="capacity-chart">
+              <div class="capacity-legend" aria-hidden="true">
+                <span><i></i> Event volume</span>
+                <span><i></i> Execution capacity</span>
+              </div>
+              <svg viewBox="0 0 720 260" role="img" aria-label="Execution capacity rises and falls with application event volume">
+                <g class="chart-grid" aria-hidden="true">
+                  <path d="M45 30H690M45 90H690M45 150H690M45 210H690" />
+                  <path d="M45 30V210M206 30V210M368 30V210M529 30V210M690 30V210" />
+                </g>
+                <path class="demand-area" d="M45 184 C110 178 140 160 190 164 C250 170 272 104 325 112 C372 119 393 61 449 69 C505 78 523 130 570 121 C619 111 642 151 690 158 L690 210 L45 210 Z" />
+                <path class="demand-line" d="M45 184 C110 178 140 160 190 164 C250 170 272 104 325 112 C372 119 393 61 449 69 C505 78 523 130 570 121 C619 111 642 151 690 158" />
+                <path class="capacity-line" d="M45 191 H165 V166 H286 V122 H408 V78 H529 V124 H650 V164 H690" />
+              </svg>
+              <div class="capacity-axis" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+            </div>
+            <div class="capacity-foot">
+              <div><span>Capacity policy</span><strong>Follow application demand</strong></div>
+              <div><span>Process state</span><strong>Durable across placement changes</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section upgrades-section" id="upgrades" data-section="05 / upgrades">
+        <div class="shell">
+          <div class="section-heading split-heading upgrade-heading">
+            <div>
+              <p class="kicker">Application upgrades</p>
+              <h2>Ship new code with the state your application already knows.</h2>
+            </div>
+            <p>
+              Running applications build up customer context, timers, and progress.
+              Highwater carries that durable state into each compatible release.
+            </p>
+          </div>
+
+          <div class="upgrade-board" aria-label="A new application build continues from existing durable Process state">
+            <div class="upgrade-board-head">
+              <span>account-risk</span>
+              <span><i></i> production</span>
+            </div>
+            <div class="release-track">
+              <article class="release-card release-current">
+                <div><span>Current release</span><b>serving</b></div>
+                <strong>Build 17</strong>
+                <small>Handler v1 · state schema 3</small>
+              </article>
+              <div class="release-connector" aria-hidden="true"><span></span><b>upgrade</b></div>
+              <article class="release-card release-next">
+                <div><span>Next release</span><b>ready</b></div>
+                <strong>Build 18</strong>
+                <small>Handler v2 · state schema 4</small>
+              </article>
+            </div>
+            <div class="state-continuity">
+              <div>
+                <span>Durable Process state</span>
+                <strong>Customer context stays attached to each key</strong>
+              </div>
+              <div class="state-keys" aria-label="Example application keys">
+                <span>account-a</span><span>account-b</span><span>account-c</span><span>account-d</span>
+              </div>
+              <p>When the state shape changes, the release carries an explicit migration. Each Process continues from committed progress.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section sandbox-section" id="sandboxing" data-section="06 / sandboxing">
+        <div class="shell">
+          <div class="section-heading split-heading sandbox-heading">
+            <div>
+              <p class="kicker">Execution isolation</p>
+              <h2>Run application code inside a deployment-scoped sandbox.</h2>
+            </div>
+            <p>
+              Each deployment gets a warm sandbox pool containing its runtime and application bundle.
+              A scoped capability authorizes the work assigned to that deployment.
+            </p>
+          </div>
+
+          <div class="sandbox-diagram" aria-label="Application code runs in a restricted sandbox connected to a scoped Highwater execution endpoint">
+            <div class="sandbox-diagram-head">
+              <span>recommendations / build-18</span>
+              <span><i></i> warm pool</span>
+            </div>
+            <div class="sandbox-map">
+              <div class="sandbox-boundary">
+                <span class="boundary-label">Sandbox boundary</span>
+                <div class="runtime-stack">
+                  <div><span>Application bundle</span><strong>handlers · libraries · models</strong></div>
+                  <div><span>Language runtime</span><strong>deployment build</strong></div>
+                  <div><span>Highwater worker</span><strong>assigned activations</strong></div>
+                  <div><span>Temporary storage</span><strong>memory-backed scratch</strong></div>
+                </div>
+                <div class="sandbox-policy">
+                  <span>Unprivileged process</span>
+                  <span>Read-only root</span>
+                  <span>Bounded CPU and memory</span>
+                  <span>Explicit outbound access</span>
+                </div>
+              </div>
+
+              <div class="capability-channel" aria-hidden="true">
+                <span></span>
+                <b>Scoped execution capability</b>
+              </div>
+
+              <div class="service-vault">
+                <div class="vault-mark"><img src="./assets/mark.svg" width="36" height="36" alt=""><span>Highwater</span></div>
+                <p>Execution endpoint</p>
+                <strong>Poll · complete · renew</strong>
+                <div class="vault-assets">
+                  <span>Durable journal</span>
+                  <span>Checkpoints</span>
+                  <span>Ownership records</span>
+                  <span>Cloud credentials</span>
+                </div>
+                <small>Service-owned storage and credentials</small>
+              </div>
+            </div>
+            <div class="sandbox-diagram-foot">
+              <span>External API access is granted per deployment.</span>
+              <span>Warm instances follow observed load.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section operations-section" id="operations" data-section="07 / operations">
+        <div class="shell">
+          <div class="section-heading split-heading operations-heading">
+            <div>
+              <p class="kicker">Application operations</p>
+              <h2>Measure progress from accepted event to committed output.</h2>
+            </div>
+            <p>
+              Latency, retries, source progress, and backlog age describe different parts of a
+              stateful workload. Highwater exposes them around the durable execution boundary.
+            </p>
+          </div>
+
+          <div class="operations-console" aria-label="Example application operations dashboard showing latency, retries, watermark lag, and backlog age">
+            <div class="operations-console-head">
+              <span>recommendations / production</span>
+              <span><i></i> healthy</span>
+            </div>
+            <div class="operations-dashboard">
+              <div class="latency-panel">
+                <div class="panel-title">
+                  <div><span>Committed output latency</span><strong>Last 30 minutes</strong></div>
+                  <div class="chart-key" aria-hidden="true"><span><i></i> p99</span><span><i></i> p50</span></div>
+                </div>
+                <svg viewBox="0 0 760 270" role="img" aria-label="Committed output latency remains stable over the last thirty minutes">
+                  <g class="operations-grid" aria-hidden="true">
+                    <path d="M46 32H730M46 92H730M46 152H730M46 212H730" />
+                    <path d="M46 32V212M217 32V212M388 32V212M559 32V212M730 32V212" />
+                  </g>
+                  <path class="p99-area" d="M46 151 C92 145 118 123 164 132 C211 142 238 113 286 120 C332 126 358 89 407 102 C455 115 483 80 531 91 C581 103 610 71 656 85 C690 94 708 82 730 87 L730 212 L46 212 Z" />
+                  <path class="p99-line" d="M46 151 C92 145 118 123 164 132 C211 142 238 113 286 120 C332 126 358 89 407 102 C455 115 483 80 531 91 C581 103 610 71 656 85 C690 94 708 82 730 87" />
+                  <path class="p50-line" d="M46 185 C102 181 128 172 178 177 C228 182 258 163 309 169 C359 175 391 153 440 160 C490 167 520 151 570 158 C621 165 669 151 730 157" />
+                </svg>
+                <div class="operations-axis" aria-hidden="true"><span>14:00</span><span>14:10</span><span>14:20</span><span>14:30</span></div>
+              </div>
+
+              <div class="operations-readout">
+                <article><span>p99 latency</span><strong>84 ms</strong><small>committed output</small></article>
+                <article><span>Retry rate</span><strong>0.06%</strong><small>last 15 minutes</small></article>
+                <article><span>Watermark lag</span><strong>1.8 s</strong><small>active sources</small></article>
+                <article><span>Backlog age</span><strong>240 ms</strong><small>oldest accepted event</small></article>
+              </div>
+            </div>
+            <div class="progress-inspector">
+              <div><span>Source progress</span><strong>Complete through 14:32:18</strong></div>
+              <div class="partition-status" aria-label="Progress for four input partitions">
+                <span><i></i> input-01</span><span><i></i> input-02</span><span class="partition-lag"><i></i> input-03</span><span><i></i> input-04</span>
+              </div>
+              <p><b>input-03</b> is holding the completeness frontier during event-time alignment.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section guarantees-section" id="guarantees" data-section="08 / guarantees">
         <div class="shell">
           <div class="section-heading centered-heading">
             <p class="kicker">A precise failure contract</p>
@@ -261,7 +473,7 @@
         </div>
       </section>
 
-      <section class="section use-cases-section" data-section="05 / applications">
+      <section class="section use-cases-section" data-section="09 / applications">
         <div class="shell">
           <div class="section-heading split-heading compact-heading">
             <div><p class="kicker">Built for application logic</p><h2>Streams with decisions inside.</h2></div>
@@ -276,7 +488,7 @@
         </div>
       </section>
 
-      <section class="cta-section" id="access" data-section="06 / access">
+      <section class="cta-section" id="access" data-section="10 / access">
         <div class="shell">
           <div class="cta-card">
             <div class="contour contour-one" aria-hidden="true"></div>
@@ -302,7 +514,7 @@
           <p>Durable execution for streaming applications.</p>
         </div>
         <div class="footer-links">
-          <div><strong>Product</strong><a href="#model">How it works</a><a href="#event-time">Event time</a><a href="#guarantees">Guarantees</a></div>
+          <div><strong>Product</strong><a href="#model">How it works</a><a href="#event-time">Event time</a><a href="#elastic-compute">Elastic compute</a><a href="#upgrades">Upgrades</a><a href="#sandboxing">Sandboxing</a><a href="#operations">Operations</a><a href="#guarantees">Guarantees</a></div>
           <div><strong>Resources</strong><a href="#" data-config-link="demo">Live demo</a><a href="#" data-config-link="docs">Documentation</a><a href="#" data-config-link="github">GitHub</a></div>
           <div><strong>Connect</strong><a href="#" data-config-link="discord">Discord</a><a href="#" data-config-link="x">X / Twitter</a><a href="#" data-config-link="linkedin">LinkedIn</a><a href="#" data-config-link="bluesky">Bluesky</a></div>
         </div>

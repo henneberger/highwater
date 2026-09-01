@@ -120,8 +120,10 @@ document.querySelector("[data-login-form]").addEventListener("submit", async (ev
     showConsole();
     await refresh();
     refreshTimer = setInterval(refresh, 5000);
-  } catch {
-    showLogin("That username or password is not valid.");
+  } catch (error) {
+    showLogin(error.status === 401
+      ? "That username or password is not valid."
+      : "The cloud console is temporarily unavailable. Try again shortly.");
   }
 });
 document.querySelector("[data-logout]").addEventListener("click", () => showLogin());

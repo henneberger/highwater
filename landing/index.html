@@ -73,39 +73,40 @@
             <p class="hero-note">Run locally in five minutes. SDKs for Python, Java, Go, and TypeScript.</p>
           </div>
 
-          <div class="product-window" aria-label="Highwater durable AI agent example">
+          <div class="product-window" aria-label="AI shopping assistant using a temporal join and durable user state">
             <div class="window-bar">
               <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-              <div class="window-title">agent.py</div>
+              <div class="window-title">shopping.py</div>
               <div class="window-status"><span></span> Running</div>
             </div>
             <div class="code-panel">
-              <pre><code><span class="code-blue">from</span> dataclasses <span class="code-blue">import</span> dataclass
+              <pre><code><span class="code-blue">from</span> dataclasses <span class="code-blue">import</span> dataclass, field
 <span class="code-blue">from</span> highwater <span class="code-blue">import</span> streaming
+<span class="code-blue">from</span> models <span class="code-blue">import</span> recommendation_model
 
-<span class="code-purple">@streaming.process</span>(key=<span class="code-green">"session_id"</span>)
+catalog_at_view = streaming.temporal_join(
+    events=<span class="code-green">"product_views"</span>,
+    versions=<span class="code-green">"catalog"</span>,
+    key=<span class="code-green">"product_id"</span>,
+    as_of=<span class="code-green">"viewed_at"</span>,
+)
+
+<span class="code-purple">@streaming.process</span>(
+    input=catalog_at_view, key=<span class="code-green">"user_id"</span>
+)
 <span class="code-purple">@dataclass</span>
-<span class="code-blue">class</span> <span class="code-yellow">SupportAgent</span>:
-    turns: <span class="code-blue">int</span> = <span class="code-orange">0</span>
+<span class="code-blue">class</span> <span class="code-yellow">ShoppingAssistant</span>:
+    recent: <span class="code-blue">list</span>[<span class="code-blue">str</span>] = field(default_factory=list)
 
     <span class="code-purple">@streaming.event</span>
-    <span class="code-blue">async def</span> <span class="code-yellow">respond</span>(self, event):
-        self.turns += <span class="code-orange">1</span>
-        answer = <span class="code-blue">await</span> streaming.call(
-            <span class="code-green">"support_model"</span>, event.message,
-            operation_id=event.id,
-        )
-        <span class="code-blue">await</span> streaming.wait_for(
-            <span class="code-green">"approval"</span>, timeout=<span class="code-green">"24h"</span>
-        )
-        <span class="code-blue">return</span> {<span class="code-green">"answer"</span>: answer,
-                <span class="code-green">"turn"</span>: self.turns}</code></pre>
-            </div>
-            <div class="event-rail" aria-label="Agent state changing across events">
-              <div class="rail-row rail-head"><span>Session events</span><span>Progress</span></div>
-              <div class="rail-row"><span class="event-pill"><i></i> user message <b>ev_73ae</b></span><span class="state-change"><s>turn 6</s> <strong>turn 7</strong></span></div>
-              <div class="rail-row"><span class="event-pill"><i></i> approval <b>received</b></span><span class="state-change"><s>waiting</s> <strong>resumed</strong></span></div>
-              <div class="commit-line"><span></span> State and outbox committed together</div>
+    <span class="code-blue">async def</span> <span class="code-yellow">recommend</span>(self, view):
+        self.recent.append(view.product.category)
+        self.recent = self.recent[-<span class="code-orange">5</span>:]
+
+        <span class="code-blue">return await</span> recommendation_model.rank(
+            product=view.product,
+            recent=self.recent,
+        )</code></pre>
             </div>
           </div>
         </div>

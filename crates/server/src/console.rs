@@ -8,6 +8,7 @@ pub(crate) async fn console_overview(
         .scan::<WorkflowRecord>("workflow/")?
         .into_iter()
         .map(|(_, workflow)| workflow)
+        .filter(|workflow| !is_process_activation(workflow))
         .collect::<Vec<_>>();
     workflows.sort_by(|left, right| right.updated_at.total_cmp(&left.updated_at));
     workflows.truncate(100);
@@ -57,6 +58,14 @@ pub(crate) async fn console_overview(
         "operators": operator_rows,
         "durability": durability,
     })))
+}
+
+fn is_process_activation(workflow: &WorkflowRecord) -> bool {
+    is_process_activation_id(&workflow.workflow_id)
+}
+
+fn is_process_activation_id(workflow_id: &str) -> bool {
+    workflow_id.starts_with("process/")
 }
 
 pub(crate) async fn console_workflow(
@@ -391,5 +400,13 @@ mod tests {
         assert_eq!(durability_status(2, 2, 128, 128), "HEALTHY");
         assert_eq!(durability_status(2, 1, 128, 128), "DEGRADED");
         assert_eq!(durability_status(2, 2, 128, 127), "DEGRADED");
+    }
+
+    #[test]
+    fn process_activations_are_not_user_runs() {
+        assert!(is_process_activation_id(
+            "process/order-intake/key/00000000000000000001"
+        ));
+        assert!(!is_process_activation_id("order-1"));
     }
 }

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 from dataclasses import asdict
@@ -131,12 +130,6 @@ async def run_session(client: Client, interval: float) -> None:
             )
             await client.advance_watermark(CUSTOMER_PROFILES, 0, event.occurred_at)
             await writer.advance_watermark(event.occurred_at)
-            print(json.dumps({
-                "event": event.kind,
-                "event_time": event.occurred_at,
-                "next_source_offset": writer.next_offset,
-                "order_id": event.order_id,
-            }), flush=True)
             await asyncio.sleep(max(0.25, interval / 3))
 
 

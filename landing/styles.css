@@ -211,6 +211,8 @@ h1 { max-width: 690px; margin-bottom: 24px; font-size: clamp(3rem, 5.5vw, 4.8rem
 .code-panel code { color: #d8e4df; font-family: var(--mono); font-size: clamp(.67rem, 1vw, .77rem); line-height: 1.75; }
 .code-purple { color: #cfb9fa; } .code-green { color: #78d7bd; } .code-blue { color: #8ebde0; }
 .code-yellow { color: #e6c16f; } .code-orange { color: #e58b6d; }
+.code-api { color: #b8d8e8; } .code-call { color: #76d4d8; } .code-attr { color: #a9c7ed; }
+.code-param { color: #d3bdec; font-style: italic; }
 .event-rail { border-top: 1px solid #739095; background: #173f46; }
 .rail-row { display: grid; grid-template-columns: 1.25fr .75fr; padding: 10px 15px; align-items: center; border-bottom: 1px solid rgb(200 223 217 / 24%); font-family: var(--mono); font-size: .65rem; }
 .rail-head { color: #91aaa7; font-size: .56rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }

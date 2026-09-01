@@ -80,27 +80,27 @@
               <div class="window-status"><span></span> Running</div>
             </div>
             <div class="code-panel">
-              <pre><code><span class="code-blue">from</span> dataclasses <span class="code-blue">import</span> dataclass, field
-<span class="code-blue">from</span> highwater <span class="code-blue">import</span> streaming
-<span class="code-blue">from</span> models <span class="code-blue">import</span> recommendation_model
+              <pre><code><span class="code-blue">from</span> dataclasses <span class="code-blue">import</span> <span class="code-api">dataclass</span>, <span class="code-api">field</span>
+<span class="code-blue">from</span> highwater <span class="code-blue">import</span> <span class="code-api">streaming</span>
+<span class="code-blue">from</span> models <span class="code-blue">import</span> <span class="code-api">recommendation_model</span>
 
-catalog = streaming.versioned(<span class="code-green">"catalog"</span>, key=<span class="code-green">"product_id"</span>)
+catalog = streaming.<span class="code-call">versioned</span>(<span class="code-green">"catalog"</span>, <span class="code-param">key</span>=<span class="code-green">"product_id"</span>)
 
-<span class="code-purple">@streaming.process</span>(key=<span class="code-green">"user_id"</span>)
+<span class="code-purple">@streaming.process</span>(<span class="code-param">key</span>=<span class="code-green">"user_id"</span>)
 <span class="code-purple">@dataclass</span>
 <span class="code-blue">class</span> <span class="code-yellow">ShoppingAssistant</span>:
-    recent: <span class="code-blue">list</span>[<span class="code-blue">str</span>] = field(default_factory=list)
+    <span class="code-attr">recent</span>: <span class="code-blue">list</span>[<span class="code-blue">str</span>] = <span class="code-call">field</span>(<span class="code-param">default_factory</span>=<span class="code-blue">list</span>)
 
     <span class="code-purple">@streaming.event</span>
-    <span class="code-blue">async def</span> <span class="code-yellow">recommend</span>(self, view, context):
-        product = <span class="code-blue">await</span> catalog.get(
-            view.product_id, as_of=context.event_time)
+    <span class="code-blue">async def</span> <span class="code-yellow">recommend</span>(<span class="code-param">self</span>, <span class="code-param">view</span>, <span class="code-param">context</span>):
+        product = <span class="code-blue">await</span> catalog.<span class="code-call">get</span>(
+            view.<span class="code-attr">product_id</span>, <span class="code-param">as_of</span>=context.<span class="code-attr">event_time</span>)
 
-        self.recent.append(product.category)
-        self.recent = self.recent[-<span class="code-orange">5</span>:]
+        self.<span class="code-attr">recent</span>.<span class="code-call">append</span>(product.<span class="code-attr">category</span>)
+        self.<span class="code-attr">recent</span> = self.<span class="code-attr">recent</span>[-<span class="code-orange">5</span>:]
 
-        <span class="code-blue">return await</span> recommendation_model.rank(
-            product=product, recent=self.recent)</code></pre>
+        <span class="code-blue">return await</span> recommendation_model.<span class="code-call">rank</span>(
+            <span class="code-param">product</span>=product, <span class="code-param">recent</span>=self.<span class="code-attr">recent</span>)</code></pre>
             </div>
           </div>
         </div>

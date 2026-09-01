@@ -151,6 +151,14 @@ Every deployment receives managed HTTPS and SDK ingestion. Highwater assigns dur
 
 Customers publish events to Highwater. Connectors, brokers, storage tiers, and partition movement are platform concerns rather than application configuration.
 
+The Wikimedia example consumes the public recent-change feed in microbatches and maintains durable per-page activity state:
+
+```bash
+python -m examples.wikimedia_recent_changes --target "$HIGHWATER_ADDRESS" --duration 60
+```
+
+Its upstream `Last-Event-ID` is committed atomically with each Highwater batch. A restart resumes from the last acknowledged public event rather than from process memory. Set `--duration 0` to keep it running.
+
 ## Execution model
 
 Highwater groups keyed Processes into movable partitions. Each partition pipelines and group-commits state transitions, keeps hot state close to execution, and snapshots durable progress asynchronously. Execution containers are cached according to observed traffic and can scale to zero when idle.

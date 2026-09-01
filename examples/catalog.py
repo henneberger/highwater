@@ -22,6 +22,7 @@ from examples.reliable_activities import (
 from examples.temporal_join import TemporalJoinWorkflow
 from examples.interval_join import IntervalJoinWorkflow
 from examples.iot_sensor_metrics import HighTemperatureAlertWorkflow, SensorWindowMaxWorkflow
+from examples.wikimedia_recent_changes import WikimediaPageActivity
 
 __all__ = [
     "FulfillmentWorkflow",
@@ -41,6 +42,7 @@ __all__ = [
     "CoVisitRecommendationWorkflow",
     "HighTemperatureAlertWorkflow",
     "SensorWindowMaxWorkflow",
+    "WikimediaPageActivity",
     "charge",
     "create_shipment",
     "release_inventory",

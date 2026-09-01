@@ -1236,6 +1236,7 @@ pub(crate) fn parse_packed_process_records(body: &[u8]) -> Result<Vec<AppendStre
             source_partition: None,
             source_offset: None,
             source_epoch: None,
+            source_checkpoint: None,
         });
     }
     if cursor != body.len() {

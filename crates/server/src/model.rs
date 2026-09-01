@@ -151,6 +151,8 @@ pub(crate) struct AppendStreamRecordRequest {
     pub(crate) source_offset: Option<u64>,
     #[serde(default)]
     pub(crate) source_epoch: Option<u64>,
+    #[serde(default)]
+    pub(crate) source_checkpoint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -328,6 +330,8 @@ pub(crate) struct SourceCursor {
     pub(crate) source_id: String,
     pub(crate) partition: u32,
     pub(crate) next_offset: u64,
+    #[serde(default)]
+    pub(crate) checkpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -120,6 +120,15 @@ pub(crate) fn append_stream_record_transaction(
         }
         _ => bail!("source_id, source_partition, and source_offset must be provided together"),
     };
+    if request
+        .source_checkpoint
+        .as_ref()
+        .is_some_and(|checkpoint| {
+            source.is_none() || checkpoint.is_empty() || checkpoint.len() > 4_096
+        })
+    {
+        bail!("source_checkpoint must be 1..4096 bytes and accompanied by source metadata");
+    }
     if let Some((source_id, _, _)) = source {
         claim_source_partition(
             transaction,
@@ -167,6 +176,7 @@ pub(crate) fn append_stream_record_transaction(
                 source_id: source_id.to_owned(),
                 partition,
                 next_offset: 0,
+                checkpoint: None,
             });
         if offset != cursor.next_offset {
             bail!(
@@ -256,6 +266,7 @@ pub(crate) fn append_stream_record_transaction(
                 source_id: source_id.to_owned(),
                 partition,
                 next_offset,
+                checkpoint: request.source_checkpoint.clone(),
             },
         )?;
     }
@@ -460,6 +471,7 @@ pub(crate) async fn get_source_cursor(
             source_id,
             partition,
             next_offset: 0,
+            checkpoint: None,
         });
     Ok(Json(cursor))
 }

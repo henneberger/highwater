@@ -303,6 +303,7 @@ class StreamWriter:
         self.partition = partition
         self.bounded = bounded
         self._next_offset: int | None = None
+        self._checkpoint: str | None = None
         self._source_epoch: int | None = None
         self._claim_deadline = 0.0
 
@@ -321,12 +322,19 @@ class StreamWriter:
                 self.stream, self.source_id, partition=self.partition,
             )
             self._next_offset = cursor["next_offset"]
+            self._checkpoint = cursor.get("checkpoint")
 
     @property
     def next_offset(self) -> int:
         if self._next_offset is None:
             raise RuntimeError("stream writer has not been opened")
         return self._next_offset
+
+    @property
+    def checkpoint(self) -> str | None:
+        if self._next_offset is None:
+            raise RuntimeError("stream writer has not been opened")
+        return self._checkpoint
 
     async def _claim(self) -> None:
         lease = await self.client._request(
@@ -345,6 +353,7 @@ class StreamWriter:
         event_time: float | datetime,
         key: str | None = None,
         kind: ChangeKind = ChangeKind.UPSERT,
+        checkpoint: str | None = None,
     ) -> dict[str, Any]:
         await self._load_cursor()
         if self._source_epoch is None or time.monotonic() >= self._claim_deadline:
@@ -364,6 +373,7 @@ class StreamWriter:
                     source_partition=self.partition,
                     source_offset=offset,
                     source_epoch=self._source_epoch,
+                    source_checkpoint=checkpoint,
                 )
                 break
             except StreamBackpressure:
@@ -372,6 +382,45 @@ class StreamWriter:
                 if time.monotonic() >= self._claim_deadline:
                     await self._claim()
         self._next_offset = offset + 1
+        self._checkpoint = checkpoint
+        return response
+
+    async def publish_many(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not 1 <= len(records) <= 1_000:
+            raise ValueError("record batches must contain between 1 and 1000 events")
+        await self._load_cursor()
+        if self._source_epoch is None or time.monotonic() >= self._claim_deadline:
+            await self._claim()
+        first_offset = self.next_offset
+        payload = []
+        for index, record in enumerate(records):
+            payload.append({
+                "partition": self.partition,
+                "event_time": _timestamp(record["event_time"]),
+                "key": record.get("key"),
+                "value": record["value"],
+                "kind": record.get("kind", ChangeKind.UPSERT),
+                "event_id": record.get("event_id"),
+                "source_id": self.source_id,
+                "source_partition": self.partition,
+                "source_offset": first_offset + index,
+                "source_epoch": self._source_epoch,
+                "source_checkpoint": record.get("checkpoint"),
+            })
+        delay = 0.01
+        while True:
+            try:
+                response = await self.client.publish_events(self.stream, payload)
+                break
+            except StreamBackpressure:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 1.0)
+                if time.monotonic() >= self._claim_deadline:
+                    await self._claim()
+                    for record in payload:
+                        record["source_epoch"] = self._source_epoch
+        self._next_offset = first_offset + len(records)
+        self._checkpoint = records[-1].get("checkpoint")
         return response
 
     async def advance_watermark(self, event_time: float | datetime) -> StreamInfo:
@@ -495,6 +544,7 @@ class Client:
         source_partition: int | None = None,
         source_offset: int | None = None,
         source_epoch: int | None = None,
+        source_checkpoint: str | None = None,
     ) -> dict[str, Any]:
         return await self._request("POST", f"/streams/{quote(stream, safe='')}/records", {
             "partition": partition,
@@ -507,6 +557,7 @@ class Client:
             "source_partition": source_partition,
             "source_offset": source_offset,
             "source_epoch": source_epoch,
+            "source_checkpoint": source_checkpoint,
         })
 
     async def publish_events(

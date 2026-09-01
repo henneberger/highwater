@@ -63,7 +63,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 self.requests.append((method, path, body))
                 if path.endswith("/cursor"):
-                    return {"next_offset": 7}
+                    return {"next_offset": 7, "checkpoint": "upstream-6"}
                 if path.endswith("/claim"):
                     return {"epoch": 3}
                 return {"record": body, "disposition": "accepted"}
@@ -74,14 +74,70 @@ class SdkTest(unittest.TestCase):
             await writer.publish(
                 {"value": 1},
                 event_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                checkpoint="upstream-7",
             )
-            return client.requests
+            return client.requests, writer
 
-        requests = asyncio.run(write())
+        requests, writer = asyncio.run(write())
         publish = next(body for method, path, body in requests if path.endswith("/records"))
         self.assertEqual(publish["source_offset"], 7)
         self.assertEqual(publish["source_epoch"], 3)
+        self.assertEqual(publish["source_checkpoint"], "upstream-7")
         self.assertEqual(publish["event_time"], 1767225600.0)
+        self.assertEqual(writer.checkpoint, "upstream-7")
+
+    def test_stream_writer_commits_upstream_checkpoint_with_batch(self):
+        class RecordingClient(Client):
+            def __init__(self):
+                super().__init__()
+                self.batch = None
+
+            async def _request(self, method, path, body=None):
+                if path.endswith("/cursor"):
+                    return {"next_offset": 11, "checkpoint": "event-10"}
+                if path.endswith("/claim"):
+                    return {"epoch": 4}
+                if path.endswith("/records/batch"):
+                    self.batch = body["records"]
+                    return [{"disposition": "accepted"} for _ in self.batch]
+                raise AssertionError(path)
+
+        async def write():
+            client = RecordingClient()
+            writer = client.stream_writer("public-events", source_id="public-feed")
+            await writer.publish_many([
+                {"value": {"n": 11}, "event_time": 11, "checkpoint": "event-11"},
+                {"value": {"n": 12}, "event_time": 12, "checkpoint": "event-12"},
+            ])
+            return client, writer
+
+        client, writer = asyncio.run(write())
+
+        self.assertEqual([record["source_offset"] for record in client.batch], [11, 12])
+        self.assertEqual(
+            [record["source_checkpoint"] for record in client.batch],
+            ["event-11", "event-12"],
+        )
+        self.assertEqual(writer.next_offset, 13)
+        self.assertEqual(writer.checkpoint, "event-12")
+
+    def test_wikimedia_change_uses_public_event_identity_and_time(self):
+        from examples.wikimedia_recent_changes import _decode_change
+
+        change, record = _decode_change("sse-42", {
+            "wiki": "enwiki",
+            "title": "Durable stream processing",
+            "type": "edit",
+            "timestamp": 1_767_225_600,
+            "length": {"old": 100, "new": 135},
+            "meta": {"id": "event-42", "uri": "https://example.test/wiki/Page"},
+        })
+
+        self.assertEqual(change.page_key, "enwiki:Durable stream processing")
+        self.assertEqual(change.length_delta, 35)
+        self.assertEqual(record["event_id"], "event-42")
+        self.assertEqual(record["checkpoint"], "sse-42")
+        self.assertEqual(record["event_time"], 1_767_225_600)
 
     def test_deploys_stream_filter_spec(self):
         class RecordingClient(Client):

@@ -212,6 +212,21 @@ impl DurableStore {
         self.scan_limit(prefix, usize::MAX)
     }
 
+    pub(crate) fn keys(&self, prefix: &str) -> Result<Vec<String>> {
+        let mut keys = Vec::new();
+        for item in self.db.iterator(IteratorMode::From(
+            prefix.as_bytes(),
+            rocksdb::Direction::Forward,
+        )) {
+            let (key, _) = item?;
+            if !key.starts_with(prefix.as_bytes()) {
+                break;
+            }
+            keys.push(String::from_utf8(key.to_vec())?);
+        }
+        Ok(keys)
+    }
+
     pub(crate) fn scan_limit<T: DeserializeOwned>(
         &self,
         prefix: &str,

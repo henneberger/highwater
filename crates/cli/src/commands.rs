@@ -20,7 +20,7 @@ Usage:
   highwater process state --id ID --key KEY
   highwater process send --id ID --key KEY --event JSON [--event-time UNIX] [--event-id ID]
   highwater process complete --id ID --through UNIX
-  highwater example run account-balance|order
+  highwater example run account-balance|order|temporal-order
 
 Global options:
   --address URL   Highwater endpoint (or HIGHWATER_ADDRESS)
@@ -238,7 +238,8 @@ async fn example(api: &Api, mut arguments: Arguments) -> Result<()> {
     match name.as_str() {
         "account-balance" => account_balance_example(api).await,
         "order" => order_example(api).await,
-        _ => bail!("unknown example {name:?}; use account-balance or order"),
+        "temporal-order" => temporal_order_example(api).await,
+        _ => bail!("unknown example {name:?}; use account-balance, order, or temporal-order"),
     }
 }
 
@@ -330,6 +331,107 @@ async fn order_example(api: &Api) -> Result<()> {
     )
     .await?;
     print_json(&wait_for_workflow(api, &id, Duration::from_secs(30)).await?)
+}
+
+async fn temporal_order_example(api: &Api) -> Result<()> {
+    let suffix = &Uuid::new_v4().simple().to_string()[..8];
+    let profiles = format!("demo-customer-profiles-{suffix}");
+    let orders = format!("demo-ready-orders-{suffix}");
+    let join_id = format!("demo-orders-at-profile-{suffix}");
+    let customer_id = format!("customer-{suffix}");
+    let order_id = format!("order-{suffix}");
+    for stream in [&profiles, &orders] {
+        api.post(
+            "/streams",
+            json!({
+                "name": stream,
+                "partitions": 1,
+                "watermark_mode": "source_managed",
+                "max_out_of_orderness": 0.0,
+                "idle_timeout": 60.0,
+                "allowed_lateness": 0.0,
+                "late_policy": "side_output",
+            }),
+        )
+        .await?;
+    }
+    api.post(
+        "/temporal-joins",
+        json!({
+            "join_id": join_id,
+            "probe_stream": orders,
+            "version_stream": profiles,
+            "workflow_type": "FulfillReadyOrder",
+            "task_queue": "orders",
+            "join_type": "left",
+        }),
+    )
+    .await?;
+    api.post(
+        &format!("/streams/{}/records/batch", encoded(&profiles)),
+        json!({"records": [
+            {
+                "partition": 0, "event_time": 0.0, "key": customer_id,
+                "value": {"version": "standard-v1", "active": true, "tier": "standard", "order_limit": 5000},
+                "kind": "upsert", "event_id": format!("{customer_id}:v1"),
+            },
+            {
+                "partition": 0, "event_time": 4.0, "key": customer_id,
+                "value": {"version": "premium-v2", "active": true, "tier": "premium", "order_limit": 10000},
+                "kind": "upsert", "event_id": format!("{customer_id}:v2"),
+            }
+        ]}),
+    )
+    .await?;
+    api.post(
+        &format!("/streams/{}/records", encoded(&orders)),
+        json!({
+            "partition": 0,
+            "event_time": 3.0,
+            "key": customer_id,
+            "value": {
+                "status": "ready", "order_id": order_id, "customer_id": customer_id,
+                "lines": [{"sku": "coffee", "quantity": 2, "unit_price": 1200}, {"sku": "filters", "quantity": 1, "unit_price": 800}],
+                "total": 3200, "payment_reference": "payment-demo-4242", "address": "1 Highwater Way",
+            },
+            "kind": "upsert",
+            "event_id": format!("{order_id}:ready"),
+        }),
+    )
+    .await?;
+    for stream in [&profiles, &orders] {
+        api.post(
+            &format!("/streams/{}/partitions/0/watermark", encoded(stream)),
+            json!({"event_time": 10.0}),
+        )
+        .await?;
+    }
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let workflow_id = loop {
+        let outputs = api
+            .get(&format!("/temporal-joins/{}/outputs", encoded(&join_id)))
+            .await?;
+        if let Some(id) = outputs
+            .as_array()
+            .and_then(|values| values.first())
+            .and_then(|value| value["workflow_id"].as_str())
+        {
+            break id.to_owned();
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("temporal order example did not emit a joined order");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let workflow = wait_for_workflow(api, &workflow_id, Duration::from_secs(30)).await?;
+    print_json(&json!({
+        "temporal_join": join_id,
+        "as_of": 3.0,
+        "selected_profile": workflow["result"]["customer_version"],
+        "later_profile": "premium-v2",
+        "workflow": workflow,
+    }))
 }
 
 async fn wait_for_workflow(api: &Api, id: &str, timeout: Duration) -> Result<Value> {

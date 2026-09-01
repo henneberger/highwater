@@ -263,6 +263,14 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
         .route("/internal/v1/query-tasks/poll", post(poll_query))
         .route("/internal/v1/query-tasks/complete", post(complete_query))
         .with_state(state.clone());
+    let console_app = Router::new()
+        .route("/console/overview", get(console_overview))
+        .route("/console/workflows/{id}", get(console_workflow))
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            Arc::new(ConsoleCredentials::from_environment()),
+            require_console_login,
+        ));
     let public_app = Router::new()
         .route("/workflows", post(start_workflow))
         .route("/workflows/{id}", get(get_workflow))
@@ -393,7 +401,9 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
     };
     let public_app = Router::new()
         .route("/health", get(health))
-        .merge(public_app);
+        .merge(public_app)
+        .merge(console_app)
+        .layer(middleware::from_fn(console_cors));
     let app = if let Some(execution_listen) = execution_listen {
         let listener = TcpListener::bind(&execution_listen).await?;
         println!("highwater execution gateway listening on {execution_listen}");

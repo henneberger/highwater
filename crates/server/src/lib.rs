@@ -1,4 +1,5 @@
 mod auth;
+mod console;
 mod error;
 mod journal;
 mod keyspace;
@@ -56,6 +57,7 @@ use streaming::{
 };
 
 use auth::*;
+use console::*;
 use error::*;
 use journal::*;
 use keyspace::*;

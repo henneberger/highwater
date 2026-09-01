@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f7f2">
+    <meta name="robots" content="noindex">
+    <link rel="stylesheet" href="./styles.css">
+    <title>Highwater Cloud</title>
+  </head>
+  <body>
+    <section class="login" data-login>
+      <form data-login-form>
+        <a class="login-brand" href="https://highwater.cloud"><i>H</i><strong>Highwater</strong><span>Cloud</span></a>
+        <p class="eyebrow">Live demo</p>
+        <h1>See durable streaming work.</h1>
+        <p class="login-copy">Examples are submitted through the Highwater CLI. Sign in to monitor their runs, retries, streams, watermarks, and processes.</p>
+        <label>Username<input name="username" value="demo" autocomplete="username" required></label>
+        <label>Password<input name="password" value="demo" type="password" autocomplete="current-password" required></label>
+        <p class="login-error" data-login-error aria-live="polite"></p>
+        <button type="submit">Enter cloud console <span>→</span></button>
+        <small>Demo credentials: <code>demo / demo</code></small>
+      </form>
+    </section>
+
+    <div class="console" data-console hidden>
+      <header>
+        <a class="brand" href="https://highwater.cloud"><i>H</i><strong>Highwater</strong><span>Cloud</span></a>
+        <div class="environment"><b></b> demo</div>
+        <nav><a href="https://highwater.cloud/docs/">Docs</a><a href="https://github.com/henneberger/highwater">GitHub</a><button class="text-button" type="button" data-logout>Sign out</button></nav>
+      </header>
+
+      <main>
+        <div class="page-heading">
+          <div><p class="eyebrow">Cloud console</p><h1>Streaming overview</h1><p>Work submitted through the CLI, observed as it executes.</p></div>
+          <div class="refresh"><span data-updated>Connecting…</span><button type="button" data-refresh>Refresh</button></div>
+        </div>
+
+        <section class="stats" data-stats></section>
+
+        <section class="panel runs-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Execution</p><h2>Recent runs</h2></div><span>Most recently updated</span></div>
+          <div class="table-wrap"><table><thead><tr><th>Run</th><th>Status</th><th>Retries</th><th>Events</th><th>Duration</th><th>Updated</th></tr></thead><tbody data-workflows></tbody></table></div>
+          <div class="empty" data-workflows-empty hidden>No runs yet. Submit an example from the CLI below.</div>
+        </section>
+
+        <div class="two-column">
+          <section class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">Streaming</p><h2>Operators</h2></div><span data-operator-count></span></div>
+            <div class="list" data-operators></div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">Event time</p><h2>Streams</h2></div><span data-stream-count></span></div>
+            <div class="list" data-streams></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Isolation</p><h2>Keyed processes</h2></div><span data-process-count></span></div>
+          <div class="process-grid" data-processes></div>
+        </section>
+
+        <section class="cli-panel">
+          <div><p class="eyebrow">Submit through the CLI</p><h2>Put fresh work on the demo cluster.</h2><p>The console stays read-only. Run either example locally, then watch it appear above.</p></div>
+          <div class="commands"><button type="button" data-copy="highwater example run temporal-order"><code>$ highwater example run temporal-order</code><span>Copy</span></button><button type="button" data-copy="highwater example run account-balance"><code>$ highwater example run account-balance</code><span>Copy</span></button></div>
+        </section>
+      </main>
+    </div>
+
+    <aside class="drawer" data-drawer hidden aria-live="polite">
+      <div class="drawer-head"><div><p class="eyebrow">Run detail</p><h2 data-drawer-title></h2></div><button type="button" data-drawer-close aria-label="Close run detail">×</button></div>
+      <div data-drawer-body></div>
+    </aside>
+    <div class="scrim" data-scrim hidden></div>
+    <script src="./app.js"></script>
+  </body>
+</html>

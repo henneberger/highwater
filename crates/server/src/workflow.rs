@@ -1036,6 +1036,18 @@ pub(crate) async fn complete_activity(
                     .schedule_deadline
                     .is_none_or(|deadline| now() + delay < deadline)
                 {
+                    append_event(
+                        transaction,
+                        &task.workflow_id,
+                        "ACTIVITY_RETRY_SCHEDULED",
+                        json!({
+                            "command_id": task.command_id,
+                            "failed_attempt": task.attempt,
+                            "next_attempt": task.attempt + 1,
+                            "delay_seconds": delay,
+                            "error": error,
+                        }),
+                    )?;
                     task.attempt += 1;
                     task.available_at = now() + delay;
                     task.lease_owner = None;

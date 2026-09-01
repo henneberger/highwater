@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1.92-bookworm AS build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN --mount=type=cache,id=highwater-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=highwater-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=highwater-control-target,target=/build/target \
+    cargo build --release --locked --package highwater-control \
+    && install -Dm755 target/release/highwater-control /out/highwater-control
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/highwater-control /usr/local/bin/highwater-control
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/highwater-control"]

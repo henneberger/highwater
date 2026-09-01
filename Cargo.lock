@@ -552,6 +552,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "highwater-control"
+version = "0.0.2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "bytes",
+ "percent-encoding",
+ "reqwest",
+ "tokio",
+]
+
+[[package]]
 name = "highwater-protocol"
 version = "0.0.2"
 dependencies = [

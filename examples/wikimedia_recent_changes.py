@@ -170,6 +170,23 @@ def _open_feed(checkpoint: str | None) -> BinaryIO:
     return urlopen(Request(FEED_URL, headers=headers), timeout=60)
 
 
+def _checkpoint_at_watermark(checkpoint: str | None, watermark: float | None) -> str | None:
+    if checkpoint is None or watermark is None:
+        return checkpoint
+    try:
+        positions = json.loads(checkpoint)
+    except (TypeError, json.JSONDecodeError):
+        return checkpoint
+    floor = int(watermark * 1_000)
+    changed = False
+    for position in positions if isinstance(positions, list) else ():
+        timestamp = position.get("timestamp") if isinstance(position, dict) else None
+        if isinstance(timestamp, int) and timestamp < floor:
+            position["timestamp"] = floor
+            changed = True
+    return json.dumps(positions, separators=(",", ":")) if changed else checkpoint
+
+
 async def run(
     client: Client,
     *,
@@ -189,7 +206,11 @@ async def run(
         while duration <= 0 or time.monotonic() - started < duration:
             response = None
             try:
-                response = await asyncio.to_thread(_open_feed, writer.checkpoint)
+                resume_checkpoint = _checkpoint_at_watermark(
+                    writer.checkpoint,
+                    watermark_floor,
+                )
+                response = await asyncio.to_thread(_open_feed, resume_checkpoint)
                 while duration <= 0 or time.monotonic() - started < duration:
                     records = await _read_batch(response, batch_size, batch_delay)
                     next_publish_at = max(next_publish_at, time.monotonic())

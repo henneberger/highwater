@@ -139,6 +139,22 @@ class SdkTest(unittest.TestCase):
         self.assertEqual(record["checkpoint"], "sse-42")
         self.assertEqual(record["event_time"], 1_767_225_600)
 
+    def test_wikimedia_resume_skips_only_finalized_event_time(self):
+        from examples.wikimedia_recent_changes import _checkpoint_at_watermark
+
+        checkpoint = (
+            '[{"topic":"codfw.mediawiki.recentchange","partition":0,"offset":-1},'
+            '{"topic":"eqiad.mediawiki.recentchange","partition":0,"timestamp":1000}]'
+        )
+
+        resumed = _checkpoint_at_watermark(checkpoint, 2.5)
+
+        self.assertEqual(
+            resumed,
+            '[{"topic":"codfw.mediawiki.recentchange","partition":0,"offset":-1},'
+            '{"topic":"eqiad.mediawiki.recentchange","partition":0,"timestamp":2500}]',
+        )
+
     def test_deploys_stream_filter_spec(self):
         class RecordingClient(Client):
             async def _request(self, method, path, body=None):

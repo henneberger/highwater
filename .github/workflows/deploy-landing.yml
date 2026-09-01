@@ -50,8 +50,16 @@ jobs:
           aws s3 cp landing/index.html "s3://${SITE_BUCKET}/index.html" \
             --content-type "text/html" \
             --cache-control "public,max-age=60"
+          for route in overview runs streams operators processes quickstart runs/detail; do
+            aws s3 cp landing/demo/index.html "s3://${SITE_BUCKET}/demo/${route}" \
+              --content-type "text/html" \
+              --cache-control "public,max-age=60"
+            aws s3 cp landing/demo/index.html "s3://${SITE_BUCKET}/demo/${route}/index.html" \
+              --content-type "text/html" \
+              --cache-control "public,max-age=60"
+          done
       - name: Refresh landing page cache
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
-            --paths "/" "/index.html" "/app.js" "/config.js" "/styles.css" "/robots.txt" "/sitemap.xml" "/assets/*" "/demo/*"
+            --paths "/" "/index.html" "/app.js" "/config.js" "/styles.css" "/robots.txt" "/sitemap.xml" "/assets/*" "/demo/*" "/overview*" "/runs*" "/streams*" "/operators*" "/processes*" "/quickstart*"

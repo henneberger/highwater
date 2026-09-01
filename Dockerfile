@@ -24,4 +24,4 @@ COPY deploy/fly/entrypoint.sh /usr/local/bin/highwater-cloud
 RUN chmod 0755 /usr/local/bin/highwater-cloud
 
 EXPOSE 8080
-CMD ["/usr/local/bin/highwater-cloud", "server"]
+ENTRYPOINT ["/usr/local/bin/highwater-cloud"]

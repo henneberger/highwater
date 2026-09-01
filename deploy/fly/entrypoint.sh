@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode=${1:-server}
 api_token=${HIGHWATER_API_TOKEN:-}
 if (( ${#api_token} < 32 )); then
   echo "HIGHWATER_API_TOKEN must contain at least 32 bytes" >&2
-  exit 1
-fi
-
-if [[ "$mode" == "live-source" ]]; then
-  export HIGHWATER_API_KEY="$api_token"
-  unset HIGHWATER_API_TOKEN api_token
-  exec python -m examples.continuous_order_enrichment
-fi
-if [[ "$mode" != "server" ]]; then
-  echo "unknown Highwater cloud mode: $mode" >&2
   exit 1
 fi
 
@@ -32,8 +21,8 @@ highwater-server \
 server_pid=$!
 
 stop() {
-  kill -TERM "$server_pid" "${worker_pid:-}" 2>/dev/null || true
-  wait "$server_pid" "${worker_pid:-}" 2>/dev/null || true
+  kill -TERM "$server_pid" "${worker_pid:-}" "${source_pid:-}" 2>/dev/null || true
+  wait "$server_pid" "${worker_pid:-}" "${source_pid:-}" 2>/dev/null || true
 }
 trap stop EXIT INT TERM
 
@@ -57,7 +46,14 @@ highwater-worker examples.catalog \
   --process-poll-width 4 &
 worker_pid=$!
 
-while kill -0 "$server_pid" 2>/dev/null && kill -0 "$worker_pid" 2>/dev/null; do
+HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
+  python -m examples.continuous_order_enrichment \
+  --target http://127.0.0.1:8080 &
+source_pid=$!
+
+while kill -0 "$server_pid" 2>/dev/null \
+  && kill -0 "$worker_pid" 2>/dev/null \
+  && kill -0 "$source_pid" 2>/dev/null; do
   sleep 1
 done
 exit 1

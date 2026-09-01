@@ -1,5 +1,24 @@
 const config = window.HIGHWATER_SITE || {};
 
+const sectionOrder = [
+  "top",
+  "applications",
+  "sandboxing",
+  "operations",
+  "upgrades",
+  "elastic-compute",
+  "batching",
+  "event-time",
+  "evidence",
+  "deployment",
+  "access",
+];
+const main = document.querySelector("#main");
+sectionOrder.forEach((id) => {
+  const section = document.getElementById(id);
+  if (section) main.append(section);
+});
+
 document.querySelectorAll("[data-config-link]").forEach((link) => {
   const key = link.dataset.configLink;
   const destination = config[key];

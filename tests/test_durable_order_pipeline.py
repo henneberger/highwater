@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from examples.durable_order_pipeline import OrderEvent, OrderIntake, reserve_order_inventory
+from examples.durable_order_pipeline import OrderEvent, OrderIntake, fulfill_order
 from highwater import Event, Registry
 from highwater.workflow_runner import WorkflowRunner
 
@@ -50,11 +50,15 @@ class DurableOrderPipelineTest(unittest.TestCase):
 
     def test_intake_emits_only_after_submit(self) -> None:
         order_id = "order-1"
-        first = self.transition(None, OrderEvent(order_id, "add_item", 1, "coffee", 2, 1_200))
+        customer_id = "customer-1"
+        first = self.transition(
+            None,
+            OrderEvent(order_id, customer_id, "add_item", 1, "coffee", 2, 1_200),
+        )
         self.assertIsNone(first["emit"])
         second = self.transition(
             first["state"],
-            OrderEvent(order_id, "add_item", 2, "filters", 1, 800),
+            OrderEvent(order_id, customer_id, "add_item", 2, "filters", 1, 800),
         )
         self.assertIsNone(second["emit"])
 
@@ -62,6 +66,7 @@ class DurableOrderPipelineTest(unittest.TestCase):
             second["state"],
             OrderEvent(
                 order_id,
+                customer_id,
                 "submit",
                 3,
                 payment_reference="payment-demo-4242",
@@ -71,24 +76,33 @@ class DurableOrderPipelineTest(unittest.TestCase):
 
         self.assertTrue(submitted["state"]["submitted"])
         self.assertEqual(submitted["emit"]["status"], "ready")
+        self.assertEqual(submitted["emit"]["customer_id"], customer_id)
         self.assertEqual(submitted["emit"]["total"], 3_200)
 
-    def test_inventory_activity_fails_transiently_then_uses_stable_id(self) -> None:
-        order = {"order_id": "order-1", "lines": [{"sku": "coffee", "quantity": 1}]}
+    def test_fulfillment_task_retries_as_one_unit(self) -> None:
+        order = {
+            "order_id": "order-1",
+            "lines": [{"sku": "coffee", "quantity": 1}],
+            "total": 1_200,
+            "address": "1 Highwater Way",
+        }
+        customer = {"version": "standard-v1", "active": True}
         with patch(
             "examples.durable_order_pipeline.current_activity",
             return_value=SimpleNamespace(attempt=1),
         ):
             with self.assertRaisesRegex(RuntimeError, "transient 503"):
-                reserve_order_inventory(order)
+                fulfill_order(order, customer)
         with patch(
             "examples.durable_order_pipeline.current_activity",
             return_value=SimpleNamespace(attempt=2),
         ):
-            reservation = reserve_order_inventory(order)
+            result = fulfill_order(order, customer)
 
-        self.assertEqual(reservation["reservation_id"], "inventory:order-1")
-        self.assertEqual(reservation["attempts"], 2)
+        self.assertEqual(result["reservation_id"], "inventory:order-1")
+        self.assertEqual(result["charge_id"], "charge:order-1")
+        self.assertEqual(result["tracking"], "tracking:order-1")
+        self.assertEqual(result["attempts"], 2)
 
 
 if __name__ == "__main__":

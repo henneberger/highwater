@@ -45,4 +45,4 @@ jobs:
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
-            --paths "/" "/index.html" "/app.js" "/config.js" "/styles.css" "/robots.txt" "/sitemap.xml" "/assets/*"
+            --paths "/" "/index.html" "/app.js" "/config.js" "/styles.css" "/robots.txt" "/sitemap.xml" "/assets/*" "/cloud/*"

@@ -264,6 +264,7 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
         .route("/internal/v1/query-tasks/complete", post(complete_query))
         .with_state(state.clone());
     let public_app = Router::new()
+        .route("/cloud/status", get(cloud_status))
         .route("/workflows", post(start_workflow))
         .route("/workflows/{id}", get(get_workflow))
         .route("/workflows/{id}/history", get(history))
@@ -393,7 +394,8 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
     };
     let public_app = Router::new()
         .route("/health", get(health))
-        .merge(public_app);
+        .merge(public_app)
+        .layer(middleware::from_fn(browser_cors));
     let app = if let Some(execution_listen) = execution_listen {
         let listener = TcpListener::bind(&execution_listen).await?;
         println!("highwater execution gateway listening on {execution_listen}");

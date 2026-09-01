@@ -46,13 +46,4 @@ class _WorkflowAnnotations:
         return self._method("update", fn, name=name)
 
 
-class _ActivityAnnotations:
-    def defn(self, fn: F | None = None, *, name: str | None = None):
-        def decorate(target: F) -> F:
-            return _mark(target, "activity", name)
-
-        return decorate(fn) if fn is not None else decorate
-
-
 workflow = _WorkflowAnnotations()
-activity = _ActivityAnnotations()

@@ -1,4 +1,4 @@
-from .annotations import activity, workflow
+from .annotations import workflow
 from .activity_context import current_activity, heartbeat
 from .errors import (
     ActivityError,
@@ -49,6 +49,6 @@ from .runtime import continue_as_new, execute_activity, execute_child_workflow, 
 __all__ = [
     "ActivityError", "ActivityOptions", "ChangeKind", "ChildWorkflowError", "ChildWorkflowOptions", "Client", "Comparison", "DeduplicateOutput", "DeduplicateSpec", "Event", "EventTimeGate", "FilterSpec", "IntervalJoinOutput", "IntervalJoinSpec", "IntervalJoinType", "NonDeterminismError", "NonRetryableError", "ProcessContext", "ProcessHandle", "ProcessOptions", "ProcessSpec", "QueryNotFound", "Registry", "Transition",
     "LatePolicy", "RemoteClient", "RemoteWorkflowHandle", "RetryPolicy", "StreamBackpressure", "StreamInfo", "StreamOptions", "StreamRecord", "StreamWriter", "HighwaterError", "TemporalJoinOutput", "TemporalJoinSpec", "TemporalJoinType", "UpdateNotFound", "WatermarkMode", "WindowAggregateSpec", "WindowAggregation",
-    "WorkflowCancelled", "WorkflowFailed", "WorkflowHandle", "WorkflowOptions", "WorkflowStatus", "activity", "execute_activity",
+    "WorkflowCancelled", "WorkflowFailed", "WorkflowHandle", "WorkflowOptions", "WorkflowStatus", "execute_activity",
     "continue_as_new", "current_activity", "execute_child_workflow", "get_version", "heartbeat", "info", "now", "sleep", "streaming", "wait_condition", "wait_for_watermark", "workflow",
 ]

@@ -35,6 +35,7 @@ orders = client.process("Order")
 | `@streaming.event` | handles one eligible event |
 | `@streaming.batch(...)` | handles a size-or-latency batch |
 | `@streaming.migrate(from_version=N)` | migrates durable state |
+| `@streaming.task` | defines retryable side-effecting work outside Process state transitions |
 
 ## Runtime
 

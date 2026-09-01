@@ -17,7 +17,6 @@ from highwater import (
     RetryPolicy,
     StreamOptions,
     WatermarkMode,
-    activity,
     current_activity,
     execute_activity,
     streaming,
@@ -86,7 +85,7 @@ RETRY_TRANSIENT_IO = ActivityOptions(
 )
 
 
-@activity.defn
+@streaming.task
 def reserve_order_inventory(order: dict) -> dict:
     attempt = current_activity().attempt
     if attempt == 1:
@@ -100,7 +99,7 @@ def reserve_order_inventory(order: dict) -> dict:
     }
 
 
-@activity.defn
+@streaming.task
 def capture_payment(order: dict) -> dict:
     return {
         "charge_id": f"charge:{order['order_id']}",
@@ -109,7 +108,7 @@ def capture_payment(order: dict) -> dict:
     }
 
 
-@activity.defn
+@streaming.task
 def create_shipping_label(order: dict, reservation: dict) -> dict:
     return {
         "tracking": f"tracking:{order['order_id']}",

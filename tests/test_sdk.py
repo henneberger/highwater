@@ -23,7 +23,6 @@ from highwater import (
     TemporalJoinType,
     WindowAggregateSpec,
     WindowAggregation,
-    activity,
     execute_activity,
     wait_for_watermark,
     workflow,
@@ -48,7 +47,9 @@ class SdkTest(unittest.TestCase):
         self.assertTrue(callable(streaming.process))
         self.assertTrue(callable(streaming.event))
         self.assertTrue(callable(streaming.batch))
+        self.assertTrue(callable(streaming.task))
         self.assertFalse(hasattr(streaming, "defn"))
+        self.assertFalse(hasattr(highwater, "activity"))
         self.assertFalse(hasattr(highwater, "process"))
 
     def test_stream_writer_resumes_cursor_and_claims_fenced_epoch(self):
@@ -393,7 +394,7 @@ class SdkTest(unittest.TestCase):
         self.assertEqual(publish["value"]["amount"], 5)
 
     def test_runner_replays_history_and_emits_commands(self):
-        @activity.defn
+        @streaming.task
         def double(value):
             return value * 2
 

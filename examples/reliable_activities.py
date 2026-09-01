@@ -5,14 +5,14 @@ from highwater import (
     ActivityOptions,
     NonRetryableError,
     RetryPolicy,
-    activity,
     execute_activity,
     heartbeat,
+    streaming,
     workflow,
 )
 
 
-@activity.defn
+@streaming.task
 def reserve_inventory(sku: str, quantity: int) -> dict:
     if quantity <= 0:
         raise NonRetryableError("quantity must be positive")
@@ -21,12 +21,12 @@ def reserve_inventory(sku: str, quantity: int) -> dict:
     return {"sku": sku, "quantity": quantity}
 
 
-@activity.defn
+@streaming.task
 def release_inventory(reservation: dict) -> None:
     heartbeat({"releasing": reservation})
 
 
-@activity.defn
+@streaming.task
 def create_shipment(reservation: dict, address: str) -> dict:
     if not address.strip():
         raise NonRetryableError("address is required")

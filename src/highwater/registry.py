@@ -30,7 +30,7 @@ class Registry:
 
     def register_activity(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         if getattr(fn, "__highwater_kind__", None) != "activity":
-            raise TypeError(f"{fn.__name__} is missing @activity.defn")
+            raise TypeError(f"{fn.__name__} is missing @streaming.task")
         self.activities[getattr(fn, "__highwater_name__")] = fn
         return fn
 

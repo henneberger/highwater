@@ -56,6 +56,14 @@ class _StreamingAnnotations:
     immediate = EventTimeGate.IMMEDIATE
     complete = EventTimeGate.COMPLETE
 
+    def task(self, fn: Any | None = None, *, name: str | None = None):
+        def decorate(target: Any) -> Any:
+            setattr(target, "__highwater_kind__", "activity")
+            setattr(target, "__highwater_name__", name or target.__name__)
+            return target
+
+        return decorate(fn) if fn is not None else decorate
+
     @overload
     def process(self, cls: T) -> T: ...
 

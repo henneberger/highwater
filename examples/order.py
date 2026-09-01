@@ -1,7 +1,7 @@
-from highwater import activity, execute_activity, wait_condition, workflow
+from highwater import execute_activity, streaming, wait_condition, workflow
 
 
-@activity.defn
+@streaming.task
 def charge(card: str, amount: int) -> dict:
     return {"card": card[-4:], "charged": amount}
 

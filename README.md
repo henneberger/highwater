@@ -31,6 +31,7 @@ No topology builder. No separate state database. No recovery code in your applic
 ```bash
 pip install highwater
 brew tap henneberger/highwater
+brew trust --formula henneberger/highwater/highwater
 brew install highwater
 ```
 

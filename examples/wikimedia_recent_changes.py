@@ -48,8 +48,9 @@ class WikimediaPrintSink:
     async def observe(self, event: RecentChange):
         self.changes += 1
         self.last_changed_at = event.occurred_at
+        output = None
         if self.changes % 100 == 0:
-            print(json.dumps({
+            output = {
                 "stream": INPUT_STREAM,
                 "events_processed_for_key": self.changes,
                 "event_id": event.event_id,
@@ -60,11 +61,12 @@ class WikimediaPrintSink:
                 "length_delta": event.length_delta,
                 "bot": event.bot,
                 "url": event.url,
-            }, separators=(",", ":")), flush=True)
+            }
+            print(json.dumps(output, separators=(",", ":")), flush=True)
         return streaming.transition(state={
             "changes": self.changes,
             "last_changed_at": self.last_changed_at,
-        })
+        }, emit=output)
 
 
 def _read_sse_event(response: BinaryIO) -> tuple[str, dict] | None:
@@ -110,7 +112,7 @@ def _decode_change(checkpoint: str, payload: dict) -> tuple[RecentChange, dict]:
     return change, {
         "value": change.__dict__,
         "event_time": change.occurred_at,
-        "key": change.page_key,
+        "key": change.wiki,
         "event_id": change.event_id,
         "checkpoint": checkpoint,
     }

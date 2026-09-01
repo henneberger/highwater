@@ -59,6 +59,18 @@ export type Process = {
   event_time_gate: string;
 };
 
+export type ProcessDetail = {
+  process_id: string;
+  outputs: { key: string; value: unknown }[];
+  system_events: {
+    type: string;
+    level: string;
+    created_at: number;
+    message: string;
+    data?: Record<string, unknown>;
+  }[];
+};
+
 export type Overview = {
   environment: string;
   generated_at: number;

@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/console/overview", get(overview).options(preflight))
         .route("/console/workflows/{id}", get(workflow).options(preflight))
+        .route("/console/processes/{id}", get(process).options(preflight))
         .with_state(state);
     let listener = TcpListener::bind(&listen)
         .await
@@ -107,6 +108,37 @@ async fn workflow(
     match state
         .client
         .get(format!("{}/console/workflows/{id}", state.data_plane))
+        .basic_auth(&state.username, Some(&state.password))
+        .send()
+        .await
+    {
+        Ok(upstream) => {
+            let status = upstream.status();
+            let body = upstream.bytes().await.unwrap_or_default();
+            response(status, body)
+        }
+        Err(_) => response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Bytes::from_static(b"{\"error\":\"data plane is unavailable\"}"),
+        ),
+    }
+}
+
+async fn process(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if !authorized(&state, &headers) {
+        return response(
+            StatusCode::UNAUTHORIZED,
+            Bytes::from_static(b"{\"error\":\"unauthorized\"}"),
+        );
+    }
+    let id = utf8_percent_encode(&id, NON_ALPHANUMERIC);
+    match state
+        .client
+        .get(format!("{}/console/processes/{id}", state.data_plane))
         .basic_auth(&state.username, Some(&state.password))
         .send()
         .await

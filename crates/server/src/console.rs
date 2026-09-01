@@ -92,6 +92,78 @@ pub(crate) async fn console_workflow(
     })))
 }
 
+pub(crate) async fn console_process(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let process = app
+        .store
+        .get::<DurableProcess>(&process_key(&id))?
+        .ok_or_else(|| anyhow!("process not found: {id}"))?;
+    let mut outputs = app
+        .store
+        .scan_limit::<Value>(&format!("process-output/{}/", encoded(&id)), 250)?
+        .into_iter()
+        .map(|(key, value)| {
+            let encoded_key = key.rsplit('/').next().unwrap_or_default();
+            let key = percent_encoding::percent_decode_str(encoded_key)
+                .decode_utf8_lossy()
+                .into_owned();
+            json!({ "key": key, "value": value })
+        })
+        .collect::<Vec<_>>();
+    outputs.sort_by(|left, right| {
+        let event_time = |value: &Value| {
+            value["value"]["event_time"]
+                .as_f64()
+                .or_else(|| value["value"]["occurred_at"].as_f64())
+                .unwrap_or_default()
+        };
+        event_time(right).total_cmp(&event_time(left))
+    });
+
+    let stream = app
+        .store
+        .get::<StreamState>(&stream_state_key(&process.stream))?;
+    let checkpoint = DurableStore::read_manifest(&app.store.manifest_path)?;
+    let mut system_events = vec![json!({
+        "type": "PROCESS_DEPLOYED",
+        "level": "info",
+        "created_at": process.created_at,
+        "message": format!("{} deployed with build {}", process.workflow_type, process.active_build_id),
+    })];
+    if let Some(stream) = stream {
+        system_events.push(json!({
+            "type": "INPUT_PROGRESS",
+            "level": "info",
+            "created_at": stream.updated_at,
+            "message": format!("{} is receiving records", process.stream),
+            "data": { "watermark": stream.watermark, "max_event_time": stream.max_event_time },
+        }));
+    }
+    if let Some(checkpoint) = checkpoint {
+        system_events.push(json!({
+            "type": "CHECKPOINT_COMMITTED",
+            "level": "info",
+            "created_at": checkpoint.created_at,
+            "message": format!("Durable checkpoint {} committed", checkpoint.checkpoint_id),
+            "data": { "sequence": checkpoint.sequence, "shards": checkpoint.shard_sequences.len() },
+        }));
+    }
+    system_events.sort_by(|left, right| {
+        right["created_at"]
+            .as_f64()
+            .unwrap_or_default()
+            .total_cmp(&left["created_at"].as_f64().unwrap_or_default())
+    });
+
+    Ok(Json(json!({
+        "process_id": process.process_id,
+        "outputs": outputs,
+        "system_events": system_events,
+    })))
+}
+
 fn durability_summary(app: &AppState) -> Result<Value> {
     let timestamp = now();
     let checkpoint = DurableStore::read_manifest(&app.store.manifest_path)?;

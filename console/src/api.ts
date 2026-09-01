@@ -1,4 +1,4 @@
-import type { Overview, WorkflowDetail } from "./types";
+import type { Overview, ProcessDetail, WorkflowDetail } from "./types";
 
 const API = ["localhost", "127.0.0.1"].includes(window.location.hostname)
   && !new URLSearchParams(window.location.search).has("cloud")
@@ -39,3 +39,4 @@ export async function getOverview(credential: string): Promise<Overview> {
   return overview;
 }
 export const getWorkflow = (credential: string, id: string) => request<WorkflowDetail>(`/console/workflows/${encodeURIComponent(id)}`, credential);
+export const getProcess = (credential: string, id: string) => request<ProcessDetail>(`/console/processes/${encodeURIComponent(id)}`, credential);

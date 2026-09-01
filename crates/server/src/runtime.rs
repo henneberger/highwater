@@ -266,6 +266,7 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
     let console_app = Router::new()
         .route("/console/overview", get(console_overview))
         .route("/console/workflows/{id}", get(console_workflow))
+        .route("/console/processes/{id}", get(console_process))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             Arc::new(ConsoleCredentials::from_environment()),

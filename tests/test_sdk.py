@@ -136,6 +136,7 @@ class SdkTest(unittest.TestCase):
         self.assertEqual(change.page_key, "enwiki:Durable stream processing")
         self.assertEqual(change.length_delta, 35)
         self.assertEqual(record["event_id"], "event-42")
+        self.assertEqual(record["key"], "enwiki")
         self.assertEqual(record["checkpoint"], "sse-42")
         self.assertEqual(record["event_time"], 1_767_225_600)
 

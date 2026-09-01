@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM rust:1.92-bookworm AS engine
 
 RUN apt-get update \
@@ -6,7 +8,11 @@ RUN apt-get update \
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked --package highwater-server
+RUN --mount=type=cache,id=highwater-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=highwater-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=highwater-cargo-target,target=/build/target \
+    cargo build --release --locked --package highwater-server \
+    && install -Dm755 target/release/highwater-server /out/highwater-server
 
 FROM python:3.12-slim-bookworm
 
@@ -19,7 +25,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY examples ./examples
 RUN python -m pip install --no-cache-dir .
-COPY --from=engine /build/target/release/highwater-server /usr/local/bin/highwater-server
+COPY --from=engine /out/highwater-server /usr/local/bin/highwater-server
 COPY deploy/fly/entrypoint.sh /usr/local/bin/highwater-cloud
 RUN chmod 0755 /usr/local/bin/highwater-cloud
 

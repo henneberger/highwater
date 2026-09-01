@@ -50,7 +50,11 @@ export type Process = {
   running: number;
   completed: number;
   failed: number;
+  retrying: number;
+  quarantined: number;
   max_concurrent_keys: number;
+  retry_concurrency: number;
+  max_attempts: number;
   mailbox_capacity: number;
   event_time_gate: string;
 };

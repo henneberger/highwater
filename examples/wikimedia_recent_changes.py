@@ -179,6 +179,8 @@ async def run(
     max_rate: float,
 ) -> None:
     await deploy(client)
+    stream = await client.stream_info(INPUT_STREAM)
+    watermark_floor = stream.watermark
     started = time.monotonic()
     committed = 0
     next_publish_at = started
@@ -195,7 +197,9 @@ async def run(
                     committed += len(records)
                     next_publish_at += len(records) / max_rate
                     watermark = max(record["event_time"] for record in records) - 30
-                    await writer.advance_watermark(watermark)
+                    if watermark_floor is None or watermark > watermark_floor:
+                        await writer.advance_watermark(watermark)
+                        watermark_floor = watermark
                     elapsed = max(time.monotonic() - started, 0.001)
                     logging.info(
                         "committed=%d rate=%.1f events/s checkpoint=%s",

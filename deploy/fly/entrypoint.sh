@@ -21,10 +21,28 @@ highwater-server \
 server_pid=$!
 
 stop() {
-  kill -TERM "$server_pid" "${worker_pid:-}" "${source_pid:-}" "${public_source_pid:-}" 2>/dev/null || true
-  wait "$server_pid" "${worker_pid:-}" "${source_pid:-}" "${public_source_pid:-}" 2>/dev/null || true
+  kill -TERM "$server_pid" "${worker_supervisor_pid:-}" "${source_supervisor_pid:-}" "${public_source_supervisor_pid:-}" 2>/dev/null || true
+  wait "$server_pid" "${worker_supervisor_pid:-}" "${source_supervisor_pid:-}" "${public_source_supervisor_pid:-}" 2>/dev/null || true
 }
 trap stop EXIT INT TERM
+
+supervise() {
+  local label=$1
+  shift
+  local child_pid status
+  trap 'kill -TERM "${child_pid:-}" 2>/dev/null || true; wait "${child_pid:-}" 2>/dev/null || true; exit 0' TERM INT
+  while true; do
+    "$@" &
+    child_pid=$!
+    if wait "$child_pid"; then
+      status=0
+    else
+      status=$?
+    fi
+    echo "$label exited with status $status; restarting" >&2
+    sleep 1
+  done
+}
 
 python - <<'PY'
 import socket
@@ -41,25 +59,25 @@ else:
     raise SystemExit("Highwater execution gateway did not start")
 PY
 
-highwater-worker examples.catalog \
+supervise worker highwater-worker examples.catalog \
   --target http://127.0.0.1:7234 \
   --process-poll-width 4 &
-worker_pid=$!
+worker_supervisor_pid=$!
 
-HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
+supervise order-source env HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
   python -m examples.continuous_order_enrichment \
   --target http://127.0.0.1:8080 &
-source_pid=$!
+source_supervisor_pid=$!
 
-HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
+supervise wikimedia-source env HIGHWATER_API_KEY="$(< /run/highwater/api-token)" \
   python -m examples.wikimedia_recent_changes \
   --target http://127.0.0.1:8080 &
-public_source_pid=$!
+public_source_supervisor_pid=$!
 
 while kill -0 "$server_pid" 2>/dev/null \
-  && kill -0 "$worker_pid" 2>/dev/null \
-  && kill -0 "$source_pid" 2>/dev/null \
-  && kill -0 "$public_source_pid" 2>/dev/null; do
+  && kill -0 "$worker_supervisor_pid" 2>/dev/null \
+  && kill -0 "$source_supervisor_pid" 2>/dev/null \
+  && kill -0 "$public_source_supervisor_pid" 2>/dev/null; do
   sleep 1
 done
 exit 1

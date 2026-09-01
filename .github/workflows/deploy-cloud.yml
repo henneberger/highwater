@@ -31,7 +31,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - uses: docker/setup-buildx-action@v3
+      - name: Authenticate Fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: registry.fly.io/highwater-cloud:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Deploy cloud service
-        run: flyctl deploy --app highwater-cloud --config fly.toml --remote-only --ha=false
+        run: flyctl deploy --app highwater-cloud --config fly.toml --image registry.fly.io/highwater-cloud:${{ github.sha }} --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

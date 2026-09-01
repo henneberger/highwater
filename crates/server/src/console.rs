@@ -106,9 +106,11 @@ pub(crate) async fn console_process(
         .into_iter()
         .map(|(key, value)| {
             let encoded_key = key.rsplit('/').next().unwrap_or_default();
-            let key = percent_encoding::percent_decode_str(encoded_key)
-                .decode_utf8_lossy()
-                .into_owned();
+            let key = URL_SAFE_NO_PAD
+                .decode(encoded_key)
+                .ok()
+                .and_then(|key| String::from_utf8(key).ok())
+                .unwrap_or_else(|| encoded_key.to_owned());
             json!({ "key": key, "value": value })
         })
         .collect::<Vec<_>>();

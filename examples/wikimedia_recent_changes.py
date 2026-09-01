@@ -170,10 +170,18 @@ def _open_feed(checkpoint: str | None) -> BinaryIO:
     return urlopen(Request(FEED_URL, headers=headers), timeout=60)
 
 
-async def run(client: Client, *, duration: float, batch_size: int, batch_delay: float) -> None:
+async def run(
+    client: Client,
+    *,
+    duration: float,
+    batch_size: int,
+    batch_delay: float,
+    max_rate: float,
+) -> None:
     await deploy(client)
     started = time.monotonic()
     committed = 0
+    next_publish_at = started
     writer = client.stream_writer(INPUT_STREAM, source_id=SOURCE_ID)
     async with writer:
         while duration <= 0 or time.monotonic() - started < duration:
@@ -182,8 +190,10 @@ async def run(client: Client, *, duration: float, batch_size: int, batch_delay: 
                 response = await asyncio.to_thread(_open_feed, writer.checkpoint)
                 while duration <= 0 or time.monotonic() - started < duration:
                     records = await _read_batch(response, batch_size, batch_delay)
+                    next_publish_at = max(next_publish_at, time.monotonic())
                     await writer.publish_many(records)
                     committed += len(records)
+                    next_publish_at += len(records) / max_rate
                     watermark = max(record["event_time"] for record in records) - 30
                     await writer.advance_watermark(watermark)
                     elapsed = max(time.monotonic() - started, 0.001)
@@ -193,6 +203,7 @@ async def run(client: Client, *, duration: float, batch_size: int, batch_delay: 
                         committed / elapsed,
                         writer.checkpoint,
                     )
+                    await asyncio.sleep(max(0.0, next_publish_at - time.monotonic()))
             except (EOFError, OSError, TimeoutError) as error:
                 logging.warning("public feed disconnected: %s", error)
                 await asyncio.sleep(1)
@@ -205,19 +216,21 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="http://127.0.0.1:7233")
     parser.add_argument("--duration", type=float, default=0.0)
-    parser.add_argument("--batch-size", type=int, default=250)
+    parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--batch-delay", type=float, default=0.25)
+    parser.add_argument("--max-rate", type=float, default=40.0)
     args = parser.parse_args()
     if not 1 <= args.batch_size <= 1_000:
         parser.error("--batch-size must be between 1 and 1000")
-    if args.duration < 0 or args.batch_delay <= 0:
-        parser.error("--duration must be non-negative and --batch-delay must be positive")
+    if args.duration < 0 or args.batch_delay <= 0 or args.max_rate <= 0:
+        parser.error("--duration must be non-negative; delays and rates must be positive")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     await run(
         Client(args.target, api_key=os.environ.get("HIGHWATER_API_KEY")),
         duration=args.duration,
         batch_size=args.batch_size,
         batch_delay=args.batch_delay,
+        max_rate=args.max_rate,
     )
 
 

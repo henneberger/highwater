@@ -19,6 +19,7 @@ from highwater import (
     ProcessContext,
     ProcessOptions,
     Registry,
+    NonDeterminismError,
     TemporalJoinSpec,
     TemporalJoinType,
     WindowAggregateSpec,
@@ -416,6 +417,50 @@ class SdkTest(unittest.TestCase):
 
         self.assertEqual([command.type for command in activation.commands], ["SCHEDULE_ACTIVITY"])
         self.assertEqual(activation.commands[0].attributes["args"], [3])
+
+    def test_runner_replays_activity_retry_bookkeeping_before_completion(self):
+        @streaming.task
+        def double(value):
+            return value * 2
+
+        @workflow.defn
+        class Retried:
+            @workflow.run
+            async def run(self, value):
+                return await execute_activity(double, value)
+
+        registry = Registry()
+        registry.register_activity(double)
+        registry.register_workflow(Retried)
+        runner = WorkflowRunner(registry)
+        events = [Event(1, "retried", "WORKFLOW_STARTED", {
+            "workflow_type": "Retried", "args": [3], "run_number": 1,
+        }, 1.0)]
+        scheduled = asyncio.run(runner.activate("retried", "Retried", events)).commands[0]
+        history = events + [
+            Event(2, "retried", "ACTIVITY_SCHEDULED", scheduled.attributes, 2.0),
+            Event(3, "retried", "ACTIVITY_RETRY_SCHEDULED", {
+                "command_id": 1, "failed_attempt": 1, "next_attempt": 2,
+            }, 3.0),
+            Event(4, "retried", "ACTIVITY_RETRY_SCHEDULED", {
+                "command_id": 1, "failed_attempt": 2, "next_attempt": 3,
+            }, 4.0),
+            Event(5, "retried", "ACTIVITY_COMPLETED", {
+                "command_id": 1, "result": 6,
+            }, 5.0),
+        ]
+
+        replayed = asyncio.run(runner.activate("retried", "Retried", history))
+
+        self.assertEqual([command.type for command in replayed.commands], ["COMPLETE_WORKFLOW"])
+        self.assertEqual(replayed.commands[0].attributes["result"], 6)
+
+        wrong_command = history.copy()
+        wrong_command[2] = Event(3, "retried", "ACTIVITY_RETRY_SCHEDULED", {
+            "command_id": 2, "failed_attempt": 1, "next_attempt": 2,
+        }, 3.0)
+        with self.assertRaisesRegex(NonDeterminismError, "wrong command"):
+            asyncio.run(runner.activate("retried", "Retried", wrong_command))
 
     def test_runner_emits_durable_watermark_timer(self):
         @workflow.defn

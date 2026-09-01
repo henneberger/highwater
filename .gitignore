@@ -9,6 +9,7 @@ dist/
 website/.docusaurus/
 website/build/
 website/node_modules/
+console/node_modules/
 highwater-state/
 highwater-objects/
 highwater-rust-state/

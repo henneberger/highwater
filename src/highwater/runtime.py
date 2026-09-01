@@ -104,6 +104,15 @@ class ReplayRuntime:
         failure_type: type[Exception] = ActivityError,
     ) -> tuple[bool, Any]:
         self._dispatch_external()
+        while (
+            success == "ACTIVITY_COMPLETED"
+            and self.index < len(self.events)
+            and self.events[self.index].type == "ACTIVITY_RETRY_SCHEDULED"
+        ):
+            retry = self.events[self.index]
+            if retry.data.get("command_id") != command_id:
+                raise NonDeterminismError("activity retry scheduled for the wrong command")
+            self.index += 1
         if self.index >= len(self.events):
             return False, None
         event = self.events[self.index]

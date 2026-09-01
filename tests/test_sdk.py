@@ -1,7 +1,9 @@
 import asyncio
+import os
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import highwater
 
@@ -31,6 +33,17 @@ from highwater.workflow_runner import WorkflowRunner
 
 
 class SdkTest(unittest.TestCase):
+    def test_client_uses_explicit_or_environment_api_key(self):
+        with patch.dict(os.environ, {"HIGHWATER_API_KEY": "environment-key"}):
+            self.assertEqual(
+                Client()._headers("application/json")["Authorization"],
+                "Bearer environment-key",
+            )
+            self.assertEqual(
+                Client(api_key="explicit-key")._headers("application/json")["Authorization"],
+                "Bearer explicit-key",
+            )
+
     def test_streaming_annotations_do_not_expose_temporal_style_defn(self):
         self.assertTrue(callable(streaming.process))
         self.assertTrue(callable(streaming.event))

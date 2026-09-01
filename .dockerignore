@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.venv
+__pycache__
+*.pyc
+build
+dist
+docs
+landing
+target
+tests
+website

@@ -7,6 +7,8 @@ description: Install Highwater, run a local streaming application, and publish e
 
 ```bash
 pip install highwater
+brew tap henneberger/highwater
+brew install highwater
 ```
 
 Create `app.py`:
@@ -34,10 +36,16 @@ class Balance:
 ## Start locally
 
 ```bash
-highwater dev app.py
+highwater server start-dev
 ```
 
-That command discovers the Processes in `app.py`, starts a complete local environment, and prints an ingestion endpoint. Development defaults cover storage, execution capacity, and recovery.
+In another terminal:
+
+```bash
+highwater-worker app
+```
+
+The service owns durable state and ingestion. The worker discovers and executes the Processes in `app.py`.
 
 ## Publish an event
 
@@ -63,10 +71,12 @@ state = await balances.state("account-a")
 print(state.total)
 ```
 
-## Deploy
+## Run against Highwater Cloud
 
 ```bash
-highwater deploy app.py
+export HIGHWATER_ADDRESS=https://api.highwater.cloud
+export HIGHWATER_API_KEY=...
+highwater example run account-balance
 ```
 
-Highwater creates a versioned deployment and managed ingestion endpoint. Continue with [Processes](/develop/python/processes), [event ingestion](/develop/python/ingestion), and [deployment safety](/develop/python/upgrades).
+The address flag and environment variable work for every CLI command. Continue with [Processes](/develop/python/processes), [event ingestion](/develop/python/ingestion), and [deployment safety](/develop/python/upgrades).

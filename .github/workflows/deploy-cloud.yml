@@ -1,0 +1,37 @@
+name: Deploy cloud service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".dockerignore"
+      - ".github/workflows/deploy-cloud.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dockerfile"
+      - "crates/protocol/**"
+      - "crates/server/**"
+      - "deploy/fly/**"
+      - "examples/**"
+      - "fly.toml"
+      - "pyproject.toml"
+      - "src/highwater/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-highwater-cloud
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Deploy cloud service
+        run: flyctl deploy --app highwater-cloud --config fly.toml --remote-only --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

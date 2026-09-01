@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "highwater"
-version = "0.0.1"
+version = "0.0.2"
 description = "Durable execution for streaming applications"
 readme = "README.md"
 license = { text = "Apache-2.0" }

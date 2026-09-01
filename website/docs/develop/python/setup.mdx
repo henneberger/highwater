@@ -44,7 +44,8 @@ __all__ = ["Balance", "Recommendations"]
 Run locally with no infrastructure parameters:
 
 ```bash
-highwater dev app.py
+highwater server start-dev
+highwater-worker app
 ```
 
 Use environment variables or your deployment environment for application secrets. Do not place credentials in Process state or event payloads.

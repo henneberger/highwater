@@ -3,16 +3,15 @@ title: Examples
 description: Explore complete streaming applications.
 ---
 
-Each example runs with `highwater dev` and publishes through the normal ingestion API.
+Start `highwater server start-dev` and `highwater-worker examples.catalog`, then run each Python module against the normal ingestion API.
 
 | Example | Run | Demonstrates |
 | --- | --- | --- |
-| Account balances | `highwater dev examples/account_balance.py` | ordered keyed state and deduplication |
-| Durable order pipeline | `highwater dev examples/durable_order_pipeline.py` | keyed intake, durable stream edges, multi-stage activities, and retries |
-| Clickstream recommendations | `highwater dev examples/clickstream_recommendation.py` | temporal enrichment, sessions, and recommendations |
-| Sensor metrics | `highwater dev examples/iot_sensor_metrics.py` | watermarks, late data, filters, and sliding aggregates |
-| Temporal join | `highwater dev examples/temporal_join.py` | fact-to-version as-of semantics and conditions |
-| Embeddings | `highwater dev examples/embeddings_batch.py` | size-or-latency vectorized inference |
-| Scheduled drain | `highwater dev examples/scheduled_batch.py` | durable ingestion with scheduled compute |
+| Account balances | `python -m examples.durable_process` | ordered keyed state and event-time completeness |
+| Durable order pipeline | `python -m examples.durable_order_pipeline` | keyed intake, durable stream edges, multi-stage activities, and retries |
+| Clickstream recommendations | `python -m examples.clickstream_recommendation` | temporal enrichment, sessions, and recommendations |
+| Sensor metrics | `python -m examples.iot_sensor_metrics` | watermarks, late data, filters, and sliding aggregates |
+| Temporal join | `python -m examples.temporal_join` | fact-to-version as-of semantics and conditions |
+| Embeddings | `python -m examples.batched_embeddings` | size-or-latency vectorized inference |
 
 Read each example as a normal Python application. The definitions do not contain partition loops, checkpoint callbacks, or transport offsets.

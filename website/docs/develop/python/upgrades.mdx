@@ -32,7 +32,7 @@ Migrations are deterministic, versioned, and committed with the first event usin
 ## Rollout
 
 ```bash
-highwater deploy app.py
+highwater-worker app --target "$HIGHWATER_EXECUTION_ADDRESS"
 ```
 
 The platform validates definitions, starts the new version, routes new activations only after it is ready, and drains work pinned to the previous version. Rollback changes routing; it never asks old code to decode newer state.

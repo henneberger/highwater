@@ -539,8 +539,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "highwater-cli"
+version = "0.0.2"
+dependencies = [
+ "anyhow",
+ "highwater-server",
+ "percent-encoding",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "highwater-protocol"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "serde",
@@ -549,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "highwater-server"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "axum",

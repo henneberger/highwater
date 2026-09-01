@@ -1,3 +1,4 @@
+mod auth;
 mod error;
 mod journal;
 mod keyspace;
@@ -16,9 +17,10 @@ mod workflow;
 use anyhow::{Context, Result, anyhow, bail};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::HeaderMap,
     http::StatusCode,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -53,6 +55,7 @@ use streaming::{
     latest_version_as_of, temporal_join_frontier,
 };
 
+use auth::*;
 use error::*;
 use journal::*;
 use keyspace::*;
@@ -66,4 +69,4 @@ use stream_api::*;
 use stream_engine::*;
 use workflow::*;
 
-pub use runtime::run;
+pub use runtime::{run, run_with_args};

@@ -1,5 +1,9 @@
 use crate::*;
 pub async fn run() -> Result<()> {
+    run_with_args(env::args().skip(1)).await
+}
+
+pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Result<()> {
     let mut listen = "127.0.0.1:7233".to_owned();
     let mut execution_listen = None;
     let mut state_dir = PathBuf::from("highwater-rust-state");
@@ -11,11 +15,12 @@ pub async fn run() -> Result<()> {
     let mut owned_partitions: Option<HashSet<usize>> = None;
     let mut execution_identity_file = None;
     let mut cluster_token_file = None;
+    let mut api_token_file = None;
     let mut key_group_count = 128_u32;
     let mut lease_seconds = 15.0_f64;
     let mut log_shards =
         std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get) + 1;
-    let mut arguments = env::args().skip(1);
+    let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--listen" => listen = arguments.next().context("--listen requires a value")?,
@@ -58,6 +63,13 @@ pub async fn run() -> Result<()> {
                     arguments
                         .next()
                         .context("--cluster-token-file requires a value")?,
+                ));
+            }
+            "--api-token-file" => {
+                api_token_file = Some(PathBuf::from(
+                    arguments
+                        .next()
+                        .context("--api-token-file requires a value")?,
                 ));
             }
             "--process-partitions" => {
@@ -167,6 +179,16 @@ pub async fn run() -> Result<()> {
     }
     if journal_uri.is_some() && execution_identities.is_empty() {
         bail!("remote journals require deployment-scoped execution identities");
+    }
+    let api_token = api_token_file
+        .map(fs::read_to_string)
+        .transpose()?
+        .map(|token| token.trim().to_owned());
+    if api_token.as_ref().is_some_and(|token| token.len() < 32) {
+        bail!("API tokens must contain at least 32 bytes");
+    }
+    if api_token.is_some() && execution_listen.is_none() {
+        bail!("--api-token-file requires --execution-listen so worker APIs stay private");
     }
     let state = AppState {
         store: Arc::new(DurableStore::open_sharded_with_journal(
@@ -361,6 +383,17 @@ pub async fn run() -> Result<()> {
             post(ack_sink_message),
         )
         .with_state(state);
+    let public_app = if let Some(token) = api_token {
+        public_app.layer(middleware::from_fn_with_state(
+            Arc::new(token),
+            require_bearer,
+        ))
+    } else {
+        public_app
+    };
+    let public_app = Router::new()
+        .route("/health", get(health))
+        .merge(public_app);
     let app = if let Some(execution_listen) = execution_listen {
         let listener = TcpListener::bind(&execution_listen).await?;
         println!("highwater execution gateway listening on {execution_listen}");

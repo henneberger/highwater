@@ -21,6 +21,7 @@ class AccountEvent:
     event_time="occurred_at",
     wait_until=streaming.complete,
     state_version=1,
+    build_id="account-balance-v1",
 )
 @dataclass
 class AccountBalanceProcess:

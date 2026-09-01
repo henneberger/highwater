@@ -30,15 +30,32 @@ No topology builder. No separate state database. No recovery code in your applic
 
 ```bash
 pip install highwater
+brew tap henneberger/highwater
+brew install highwater
 ```
 
 ## Run locally
 
 ```bash
-highwater dev app.py
+highwater server start-dev
 ```
 
-`highwater dev` starts a complete local environment, discovers the Processes in `app.py`, and prints the local ingestion endpoint. Storage, partitions, leases, and execution pools use development defaults.
+In another terminal, register the application code with the local execution service:
+
+```bash
+highwater-worker app
+```
+
+`highwater server start-dev` starts the durable service with local storage. The worker discovers the Processes and workflows in `app.py`.
+
+The same CLI executes against Highwater Cloud:
+
+```bash
+export HIGHWATER_ADDRESS=https://api.highwater.cloud
+export HIGHWATER_API_KEY=...
+highwater example run account-balance
+highwater example run order
+```
 
 Send an event from Python:
 
@@ -62,19 +79,17 @@ curl -X POST http://localhost:7233/v1/processes/Balance/events \
   -d '{"account_id":"account-a","amount":5}'
 ```
 
-## Deploy
+## Execute remotely
+
+Workers and the durable service are deployed independently, as they are in Temporal. Point the CLI or Python client at the service address; workflow and Process commands are otherwise identical to local commands.
 
 ```bash
-highwater deploy app.py
+highwater --address "$HIGHWATER_ADDRESS" workflow start \
+  --type OrderWorkflow \
+  --arg '"4242424242424242"' \
+  --arg '25' \
+  --wait
 ```
-
-Highwater packages the application, creates a versioned deployment, provisions event ingestion, and scales execution independently for each state partition. The same Process API runs continuously, on demand, or on a schedule.
-
-```bash
-highwater deploy app.py --schedule '0 * * * *'
-```
-
-A schedule controls when compute drains available events. It does not turn off ingestion or weaken durability.
 
 ## Why Highwater
 
@@ -196,7 +211,7 @@ landing/              product landing page
 
 ## Build the implementation
 
-Contributors working on the engine can build and test from source. End users install `highwater` and use `highwater dev`; these commands are not part of the customer setup path.
+Contributors working on the engine can build and test from source. End users install `highwater` and use `highwater server start-dev`; these commands are not part of the customer setup path.
 
 ```bash
 cargo test --workspace

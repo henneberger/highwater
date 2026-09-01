@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import struct
 import time
 import uuid
@@ -377,16 +378,29 @@ class StreamWriter:
 
 
 class Client:
-    def __init__(self, target: str = "http://127.0.0.1:7233", *, poll_interval: float = 0.05) -> None:
+    def __init__(
+        self,
+        target: str = "http://127.0.0.1:7233",
+        *,
+        poll_interval: float = 0.05,
+        api_key: str | None = None,
+    ) -> None:
         self.target = target.rstrip("/")
         self.poll_interval = poll_interval
+        self.api_key = api_key or os.environ.get("HIGHWATER_API_KEY")
+
+    def _headers(self, content_type: str) -> dict[str, str]:
+        headers = {"Content-Type": content_type}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     async def _request(self, method: str, path: str, body: Any = None) -> Any:
         def send() -> Any:
             data = None if body is None else json.dumps(body).encode()
             request = Request(
                 f"{self.target}{path}", data=data, method=method,
-                headers={"Content-Type": "application/json"},
+                headers=self._headers("application/json"),
             )
             try:
                 with urlopen(request, timeout=15) as response:
@@ -405,7 +419,7 @@ class Client:
                 f"{self.target}{path}/packed",
                 data=body,
                 method="POST",
-                headers={"Content-Type": "application/x-highwater-batch"},
+                headers=self._headers("application/x-highwater-batch"),
             )
             try:
                 with urlopen(request, timeout=30) as response:

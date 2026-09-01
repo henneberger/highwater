@@ -1,46 +1,49 @@
 ---
 title: CLI
 sidebar_label: CLI
-description: Install, develop, deploy, inspect, and manage Highwater applications.
+description: Start Highwater and execute workflows and Processes locally or remotely.
 ---
 
-## Develop
+## Start locally
 
 ```bash
-highwater dev APP
+highwater server start-dev
 ```
 
-Starts a complete local environment, discovers definitions, watches source files, and prints local ingestion details.
+Start application workers separately with `highwater-worker MODULE`.
 
-| Option | Meaning |
+## Connect
+
+Every remote command accepts global connection options before or after the command:
+
+| Option or environment variable | Meaning |
 | --- | --- |
-| `--port PORT` | override the local HTTP port |
-| `--no-reload` | disable source watching |
+| `--address URL`, `HIGHWATER_ADDRESS` | service endpoint |
+| `--api-key KEY`, `HIGHWATER_API_KEY` | bearer credential |
 
-Infrastructure tuning is not required.
-
-## Deploy
+## Workflows
 
 ```bash
-highwater deploy APP [--schedule CRON]
+highwater workflow start --type TYPE [--id ID] [--arg JSON] [--wait]
+highwater workflow describe --id ID
+highwater workflow history --id ID
+highwater workflow signal --id ID --name NAME [--arg JSON]
 ```
 
-Creates an immutable application version and promotes it after validation.
-
-| Option | Meaning |
-| --- | --- |
-| `--schedule CRON` | run compute during scheduled drain windows |
-| `--env NAME=VALUE` | set application configuration |
-| `--secret NAME` | bind a managed secret |
-| `--name NAME` | override the deployment name |
-
-## Inspect
+## Processes
 
 ```bash
-highwater deployments
-highwater describe DEPLOYMENT
-highwater logs DEPLOYMENT
-highwater backlogs DEPLOYMENT
+highwater process describe --id ID
+highwater process state --id ID --key KEY
+highwater process send --id ID --key KEY --event JSON
+highwater process complete --id ID --through EVENT_TIME
 ```
 
-These commands expose application versions, Process lag, watermark lag, retries, and output delivery without exposing internal hosts or storage paths.
+`process complete` advances an explicit event-time completeness boundary. It is not required for immediate Processes.
+
+## Bundled examples
+
+```bash
+highwater example run account-balance
+highwater example run order
+```

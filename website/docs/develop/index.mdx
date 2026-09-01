@@ -9,8 +9,8 @@ The typical loop is:
 
 1. Install `highwater`.
 2. Define a [Process](/develop/python/processes).
-3. Run `highwater dev app.py`.
+3. Run `highwater server start-dev` and `highwater-worker app`.
 4. Publish through the [managed ingestion API](/develop/python/ingestion).
-5. Deploy with `highwater deploy app.py`.
+5. Deploy the worker and point clients at the service address.
 
 Application code never manages partition ownership, retries, checkpoints, or recovery. Those remain platform responsibilities.

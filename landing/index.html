@@ -81,14 +81,10 @@
             </div>
             <div class="code-panel">
               <pre><code><span class="code-blue">from</span> dataclasses <span class="code-blue">import</span> dataclass, field
-<span class="code-blue">from</span> highwater <span class="code-blue">import</span> streaming, TemporalJoinSpec
+<span class="code-blue">from</span> highwater <span class="code-blue">import</span> streaming
 <span class="code-blue">from</span> models <span class="code-blue">import</span> recommendation_model
 
-catalog_at_view = TemporalJoinSpec(
-    operator_id=<span class="code-green">"catalog-at-view"</span>,
-    probe_stream=<span class="code-green">"product-views"</span>, version_stream=<span class="code-green">"catalog"</span>,
-    workflow=<span class="code-green">"EnrichProductView"</span>,
-)
+catalog = streaming.versioned(<span class="code-green">"catalog"</span>, key=<span class="code-green">"product_id"</span>)
 
 <span class="code-purple">@streaming.process</span>(key=<span class="code-green">"user_id"</span>)
 <span class="code-purple">@dataclass</span>
@@ -96,14 +92,15 @@ catalog_at_view = TemporalJoinSpec(
     recent: <span class="code-blue">list</span>[<span class="code-blue">str</span>] = field(default_factory=list)
 
     <span class="code-purple">@streaming.event</span>
-    <span class="code-blue">async def</span> <span class="code-yellow">recommend</span>(self, view):
-        self.recent.append(view.product.category)
+    <span class="code-blue">async def</span> <span class="code-yellow">recommend</span>(self, view, context):
+        product = <span class="code-blue">await</span> catalog.get(
+            view.product_id, as_of=context.event_time)
+
+        self.recent.append(product.category)
         self.recent = self.recent[-<span class="code-orange">5</span>:]
 
         <span class="code-blue">return await</span> recommendation_model.rank(
-            product=view.product,
-            recent=self.recent,
-        )</code></pre>
+            product=product, recent=self.recent)</code></pre>
             </div>
           </div>
         </div>

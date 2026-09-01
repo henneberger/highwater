@@ -84,6 +84,27 @@ pub(crate) async fn console_cors(request: Request, next: Next) -> Response {
             axum::http::HeaderValue::from_static("Origin"),
         );
     }
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::STRICT_TRANSPORT_SECURITY,
+        axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        axum::http::header::X_FRAME_OPTIONS,
+        axum::http::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        axum::http::header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        axum::http::HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+    );
     response
 }
 

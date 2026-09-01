@@ -1,7 +1,6 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import * as Select from "@radix-ui/react-select";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 import { cn } from "./lib";
 
@@ -26,8 +25,4 @@ export function SelectField({ value, onValueChange, options, label }: { value: s
     <Select.Trigger className="select-trigger" aria-label={label}><Select.Value /><Select.Icon><ChevronDown size={14} /></Select.Icon></Select.Trigger>
     <Select.Portal><Select.Content className="select-content" position="popper" sideOffset={5}><Select.Viewport>{options.map((option) => <Select.Item className="select-item" value={option.value} key={option.value}><Select.ItemText>{option.label}</Select.ItemText><Select.ItemIndicator><Check size={13} /></Select.ItemIndicator></Select.Item>)}</Select.Viewport></Select.Content></Select.Portal>
   </Select.Root>;
-}
-
-export function Sheet({ open, onOpenChange, title, description, children }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; description?: string; children: ReactNode }) {
-  return <Dialog.Root open={open} onOpenChange={onOpenChange}><Dialog.Portal><Dialog.Overlay className="sheet-overlay" /><Dialog.Content className="sheet-content"><div className="sheet-header"><div><Dialog.Title>{title}</Dialog.Title>{description && <Dialog.Description>{description}</Dialog.Description>}</div><Dialog.Close className="icon-button" aria-label="Close"><X size={18} /></Dialog.Close></div>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }

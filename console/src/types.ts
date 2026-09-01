@@ -35,6 +35,10 @@ export type Operator = {
   matched?: number;
   suppressed?: number;
   workflow_type: string;
+  join_type?: string;
+  probe_watermark?: number;
+  version_watermark?: number;
+  latest_workflow_id?: string;
 };
 
 export type Process = {
@@ -61,11 +65,37 @@ export type Overview = {
     streams: number;
     processes: number;
     operators: number;
+    recovered_workflows: number;
   };
   workflows: Workflow[];
   streams: Stream[];
   operators: Operator[];
   processes: Process[];
+  durability: {
+    status: string;
+    storage_mode: string;
+    checkpoint?: {
+      checkpoint_id: string;
+      sequence: number;
+      created_at: number;
+      age_seconds: number;
+      shards: number;
+      state_handles: number;
+    };
+    partition_owners: {
+      partition: number;
+      node_id: string;
+      epoch: number;
+      status: string;
+      lease_remaining_seconds: number;
+      checkpoint_id?: string;
+    }[];
+    active_partition_owners: number;
+    key_groups: number;
+    active_key_groups: number;
+    node_id: string;
+    region: string;
+  };
 };
 
 export type HistoryEvent = {
@@ -76,4 +106,11 @@ export type HistoryEvent = {
   data: Record<string, unknown>;
 };
 
-export type WorkflowDetail = { workflow: Workflow; history: HistoryEvent[] };
+export type ExecutionTrace = {
+  source: { stream: string; partition: number; offset: number; event_id?: string; key?: string; event_time: number; ingestion_time: number; late: boolean; too_late: boolean };
+  gate: { as_of: number; release_watermark?: number; decision: string };
+  operator: { operator_id: string; kind: string; probe_stream: string; version_stream: string; join_type: string; matched: boolean };
+  version?: { stream: string; partition: number; offset: number; event_id?: string; event_time: number; value: unknown };
+};
+
+export type WorkflowDetail = { workflow: Workflow; history: HistoryEvent[]; trace?: ExecutionTrace };

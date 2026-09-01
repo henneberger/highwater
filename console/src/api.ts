@@ -23,5 +23,19 @@ export async function request<T>(path: string, credential: string): Promise<T> {
   return body as T;
 }
 
-export const getOverview = (credential: string) => request<Overview>("/console/overview", credential);
+export async function getOverview(credential: string): Promise<Overview> {
+  const overview = await request<Overview>("/console/overview", credential);
+  overview.counts.recovered_workflows ??= overview.workflows.filter((run) => run.status === "COMPLETED" && run.retries > 0).length;
+  overview.durability ??= {
+    status: "UNKNOWN",
+    storage_mode: "checkpointed",
+    partition_owners: [],
+    active_partition_owners: 0,
+    key_groups: 0,
+    active_key_groups: 0,
+    node_id: "upgrading",
+    region: "unknown",
+  };
+  return overview;
+}
 export const getWorkflow = (credential: string, id: string) => request<WorkflowDetail>(`/console/workflows/${encodeURIComponent(id)}`, credential);

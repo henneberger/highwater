@@ -50,6 +50,14 @@ pub(crate) struct DurableStore {
 }
 
 impl DurableStore {
+    pub(crate) fn durability_mode(&self) -> &'static str {
+        if self.journal.is_some() {
+            "replicated_object_log"
+        } else {
+            "local_checkpoint"
+        }
+    }
+
     pub(crate) fn open_sharded_with_journal(
         state_dir: &FsPath,
         object_dir: &FsPath,

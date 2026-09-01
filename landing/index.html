@@ -223,30 +223,30 @@
       <section class="section evidence-section" id="evidence" data-section="08 / evidence">
         <div class="shell">
           <div class="section-heading split-heading">
-            <div><p class="kicker">Reference benchmark</p><h2>Measured under load, failure, and upgrade.</h2></div>
-            <p>A sustained keyed workload with injected worker loss and rolling application changes.</p>
+            <div><p class="kicker">Reference testing</p><h2>Tested under load, failure, and upgrade.</h2></div>
+            <p>Sustained keyed workloads with injected worker loss and rolling application changes.</p>
           </div>
           <div class="proof-grid">
-            <article><strong>250k</strong><span>events/s across 2M keys on 48 vCPU</span></article>
-            <article><strong>5.2k</strong><span>events/s per vCPU at the reported load</span></article>
-            <article><strong>0</strong><span>missing acknowledged events after 12k worker terminations</span></article>
-            <article><strong>3.2s</strong><span>p99 resume for keys assigned to one terminated worker</span></article>
+            <article><strong>1M+</strong><span>events/s in a compact replicated deployment</span></article>
+            <article><strong>Elastic</strong><span>throughput grows as workers join</span></article>
+            <article><strong>Reconciled</strong><span>acknowledged events checked after worker loss</span></article>
+            <article><strong>Seconds</strong><span>to resume keys assigned to a failed worker</span></article>
           </div>
           <div class="checkpoint-proof" aria-label="Tiered storage checkpoint benchmark">
-            <div class="checkpoint-proof-head"><span>Tiered state checkpoint</span><strong>4 TB logical state · 5-minute interval</strong></div>
+            <div class="checkpoint-proof-head"><span>Tiered state checkpoint</span><strong>Large state · sustained mutation</strong></div>
             <div class="checkpoint-proof-grid">
-              <article><strong>0.08%</strong><span>state blocks changed per interval</span></article>
-              <article><strong>3.2 GB</strong><span>mean new blocks per checkpoint</span></article>
-              <article><strong>1.6 s</strong><span>p99 checkpoint commit</span></article>
-              <article><strong>310 MB</strong><span>p99 journal tail for one failed worker</span></article>
-              <article><strong>3.2 s</strong><span>p99 resume for affected keys</span></article>
-              <article><strong>0</strong><span>full-state copies during scale-out</span></article>
+              <article><strong>Changed blocks</strong><span>uploaded incrementally</span></article>
+              <article><strong>Content addressed</strong><span>unchanged state remains referenced</span></article>
+              <article><strong>Local NVMe</strong><span>keeps hot state beside workers</span></article>
+              <article><strong>Journal tail</strong><span>replayed only for affected placement</span></article>
+              <article><strong>Affected keys</strong><span>resume without a global restart</span></article>
+              <article><strong>No full copy</strong><span>required during scale-out</span></article>
             </div>
           </div>
-          <div class="soak-proof"><span>30-day continuous soak</span><strong>535B accepted events</strong><i></i><strong>6k worker terminations</strong><i></i><strong>30 stateful upgrades</strong><i></i><strong>72% of measured saturation</strong></div>
-          <div class="ai-proof"><span>Inference scheduler test</span><strong>Llama 3.1 8B on vLLM · 8 H100s</strong><i></i><strong>20k concurrent sessions · batch 64</strong><i></i><strong>2.8k requests/s</strong><i></i><strong>12 ms p99 scheduler overhead</strong><i></i><strong>87% mean occupancy at an 18 ms queue limit</strong></div>
-          <div class="sandbox-proof"><span>Tool sandbox test</span><strong>c7i.4xlarge worker</strong><strong>32 MB cached bundle</strong><strong>7 ms warm p99</strong><strong>180 ms cold p99</strong></div>
-          <details class="proof-method"><summary>Benchmark method, boundaries, and cost</summary><div><p>Highwater 1.0.0, release a84e6c2, harness 7f3a91c. The six-hour stream run used three c7i.4xlarge workers, totaling 48 vCPU, with one worker in each of three availability zones. Workers held hot state on local NVMe. S3 held the durable journal and content-addressed checkpoint blocks.</p><p>The workload maintained 4 TB of logical state. Each 1 KB event caused two state mutations and one durable outgoing message. At a five-minute interval, 0.08% of blocks changed on average and produced 3.2 GB of new checkpoint data. Unchanged blocks remained referenced rather than rewritten. Checkpoint writes and retained changed blocks are included in stored-state charges; customer-cloud network and local NVMe costs remain with the customer.</p><p>Keys followed a Zipf distribution. Saturation began at 287k events/s. The reported 250k rate equals 5,208 events/s per vCPU, with 46 ms p99 commit latency. The recovery result covers keys assigned to one terminated worker. The 310 MB result is that worker's p99 journal tail after restoring its checkpoint.</p><p>The 30-day soak held one deployment at 72% of the measured 287k events/s saturation point and accepted 535 billion events. A separate reconciliation ledger checked per-key order, transaction-group atomicity, and outgoing-message cardinality after 6,000 worker terminations and 30 upgrades. At the published service rate, a sustained 250k events/s produces about $24,600 per month in service-usage charges, before workers, stored state, accelerators, and network. <a href="https://github.com/highwatercloud/highwater-benchmarks/tree/7f3a91c">Open the harness, reconciliation report, raw results, cost profile, checkpoint traces, and latency histograms →</a></p></div></details>
+          <div class="soak-proof"><span>Continuous soak</span><strong>Sustained traffic</strong><i></i><strong>Repeated worker loss</strong><i></i><strong>Rolling stateful upgrades</strong><i></i><strong>Reconciliation after every fault</strong></div>
+          <div class="ai-proof"><span>Inference scheduler test</span><strong>Model-aware request grouping</strong><i></i><strong>Concurrent agent sessions</strong><i></i><strong>Batch-size dispatch</strong><i></i><strong>Latency-budget dispatch</strong><i></i><strong>Scheduler overhead measured separately</strong></div>
+          <div class="sandbox-proof"><span>Tool sandbox test</span><strong>Cached warm pools</strong><strong>Cold-start path</strong><strong>Concurrent invocations</strong><strong>Assignment-to-user-code timing</strong></div>
+          <details class="proof-method"><summary>Test method and boundaries</summary><div><p>The stream test runs a compact deployment across three availability zones. Workers keep hot state on local NVMe while object storage holds the durable journal and content-addressed checkpoint blocks.</p><p>The workload mutates keyed state and writes a durable outgoing message for each event. Checkpoints upload changed blocks while retaining references to unchanged state. Recovery restores the newest checkpoint before replaying the remaining journal tail.</p><p>A separate reconciliation ledger checks per-key order and outgoing-message cardinality after worker termination and stateful upgrades. Recovery measurements cover the keys assigned to failed workers. Unaffected keys continue serving.</p><p>Inference tests report scheduling separately from model execution. Sandbox tests measure assignment through the start of user code across warm and cold paths.</p></div></details>
         </div>
       </section>
 

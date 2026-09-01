@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mode=${1:-server}
 api_token=${HIGHWATER_API_TOKEN:-}
 if (( ${#api_token} < 32 )); then
   echo "HIGHWATER_API_TOKEN must contain at least 32 bytes" >&2
+  exit 1
+fi
+
+if [[ "$mode" == "live-source" ]]; then
+  export HIGHWATER_API_KEY="$api_token"
+  unset HIGHWATER_API_TOKEN api_token
+  exec python -m examples.continuous_order_enrichment
+fi
+if [[ "$mode" != "server" ]]; then
+  echo "unknown Highwater cloud mode: $mode" >&2
   exit 1
 fi
 

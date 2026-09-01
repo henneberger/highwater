@@ -105,10 +105,15 @@ function PageHeader({ eyebrow, title: heading, description, actions }: { eyebrow
 
 function StatusSummary({ data, rate }: { data: Overview; rate: number }) {
   const healthy = data.durability.status === "HEALTHY";
+  const activeJobs = data.operators.filter((operator) => operator.status === "ACTIVE").length
+    + data.processes.filter((process) => process.status === "ACTIVE").length;
+  const liveInputs = data.streams.filter((stream) =>
+    !stream.finalized && data.generated_at - stream.updated_at <= 30
+  ).length;
   const items = [
     { label: "Durability health", value: healthy ? "Healthy" : title(data.durability.status), note: `${data.durability.active_partition_owners}/${data.durability.partition_owners.length} partition owners active`, icon: healthy ? CheckCircle2 : TriangleAlert, tone: healthy ? "green" : "red" },
     { label: "Event throughput", value: `${rate < 10 ? rate.toFixed(1) : compact(rate)}/s`, note: "60-second observed rate", icon: Activity, tone: "blue" },
-    { label: "Running now", value: data.counts.running_workflows.toString(), note: `${data.counts.workflows} total runs`, icon: Play, tone: "amber" },
+    { label: "Streaming jobs", value: activeJobs.toString(), note: `${liveInputs} inputs receiving · ${data.counts.running_workflows} executions in flight`, icon: Play, tone: "amber" },
     { label: "Watermark lag", value: maxWatermarkLag(data.streams), note: `${data.counts.streams} managed streams`, icon: Clock3, tone: "violet" },
   ];
   return <div className="metric-grid">{items.map(({ label, value, note, icon: Icon, tone }) => <Card className="metric-card" key={label}><div className={`metric-icon ${tone}`}><Icon size={18} /></div><div><span>{label}</span><strong>{value}</strong><small>{note}</small></div></Card>)}</div>;

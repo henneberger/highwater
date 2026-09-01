@@ -317,12 +317,16 @@ class StreamWriter:
 
     async def _load_cursor(self) -> None:
         if self._next_offset is None:
-            cursor = await self.client._request(
-                "GET",
-                f"/streams/{quote(self.stream, safe='')}/sources/"
-                f"{quote(self.source_id, safe='')}/partitions/{self.partition}/cursor",
+            cursor = await self.client.source_cursor(
+                self.stream, self.source_id, partition=self.partition,
             )
             self._next_offset = cursor["next_offset"]
+
+    @property
+    def next_offset(self) -> int:
+        if self._next_offset is None:
+            raise RuntimeError("stream writer has not been opened")
+        return self._next_offset
 
     async def _claim(self) -> None:
         lease = await self.client._request(
@@ -467,6 +471,15 @@ class Client:
     async def stream_info(self, name: str) -> StreamInfo:
         value = await self._request("GET", f"/streams/{quote(name, safe='')}")
         return StreamInfo(**value)
+
+    async def source_cursor(
+        self, stream: str, source_id: str, *, partition: int = 0,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"/streams/{quote(stream, safe='')}/sources/"
+            f"{quote(source_id, safe='')}/partitions/{partition}/cursor",
+        )
 
     async def publish_event(
         self,

@@ -5,7 +5,13 @@ primary_region = "sjc"
   dockerfile = "Dockerfile"
 
 [env]
+  HIGHWATER_ADDRESS = "https://api.highwater.cloud"
+  HIGHWATER_LIVE_INTERVAL = "15"
   PYTHONUNBUFFERED = "1"
+
+[processes]
+  app = "/usr/local/bin/highwater-cloud server"
+  live_source = "/usr/local/bin/highwater-cloud live-source"
 
 [http_service]
   internal_port = 8080
@@ -26,7 +32,14 @@ primary_region = "sjc"
   source = "highwater_data"
   destination = "/data"
   initial_size = "1gb"
+  processes = ["app"]
 
 [[vm]]
   size = "shared-cpu-1x"
   memory = "1gb"
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  processes = ["live_source"]

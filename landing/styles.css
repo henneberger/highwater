@@ -1082,6 +1082,15 @@ h1 { max-width: 690px; margin-bottom: 24px; font-size: clamp(3rem, 5.5vw, 4.8rem
 .commercial-grid strong { margin: 10px 0 7px; font-size: var(--type-small); line-height: 1.42; }
 .commercial-grid small { color: var(--muted); font-size: var(--type-caption); line-height: 1.5; }
 
+@media (min-width: 1101px) {
+  .pain-ledger h3 { min-height: 62px; }
+  .operator-controls strong { min-height: 34px; }
+  .storage-flow article > strong { min-height: 38px; }
+  .deployment-option > .option-services,
+  .deployment-option > .hybrid-boundary { min-height: 113px; }
+  .commercial-grid strong { min-height: 40px; }
+}
+
 /* No rendered label or diagram copy falls below 12px. */
 main > section::before,
 .eyebrow, .kicker, .hero-note, .window-bar, .rail-row, .rail-head, .commit-line, .signal-strip,

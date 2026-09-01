@@ -50,7 +50,7 @@ jobs:
           aws s3 cp landing/index.html "s3://${SITE_BUCKET}/index.html" \
             --content-type "text/html" \
             --cache-control "public,max-age=60"
-          for route in overview runs streams operators processes quickstart runs/detail; do
+          for route in overview runs streams operators processes quickstart runs/detail processes/detail; do
             aws s3 cp landing/demo/index.html "s3://${SITE_BUCKET}/demo/${route}" \
               --content-type "text/html" \
               --cache-control "public,max-age=60"

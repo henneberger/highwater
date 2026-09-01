@@ -32,6 +32,7 @@ const paths: Record<Page, string> = {
 
 function pageFromPath(pathname: string): Page {
   if (pathname.startsWith("/runs")) return "runs";
+  if (pathname.startsWith("/processes")) return "processes";
   const match = Object.entries(paths).find(([, path]) => path === pathname);
   return match ? match[0] as Page : "overview";
 }
@@ -128,7 +129,7 @@ function SectionHeading({ title: heading, detail, action }: { title: string; det
   return <div className="section-heading"><div><h2>{heading}</h2>{detail && <p>{detail}</p>}</div>{action}</div>;
 }
 
-function OverviewPage({ data, trend, rate, openRun, setPage }: { data: Overview; trend: TrendPoint[]; rate: number; openRun: (id: string) => void; setPage: (page: Page) => void }) {
+function OverviewPage({ data, trend, rate, openRun, openProcess, setPage }: { data: Overview; trend: TrendPoint[]; rate: number; openRun: (id: string) => void; openProcess: (id: string) => void; setPage: (page: Page) => void }) {
   const attention = data.workflows.filter((run) => run.status === "FAILED").slice(0, 4);
   const recovered = data.workflows.filter((run) => run.status === "COMPLETED" && run.retries > 0).slice(0, 4);
   const latestRecovery = recovered[0];
@@ -139,17 +140,17 @@ function OverviewPage({ data, trend, rate, openRun, setPage }: { data: Overview;
       <Card className="chart-card"><SectionHeading title="Event throughput" detail="Records observed per second across managed streams" /><div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={trend}><defs><linearGradient id="rateFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2e6fe8" stopOpacity={0.28} /><stop offset="100%" stopColor="#2e6fe8" stopOpacity={0} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e6e8eb" /><XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: "#7a808a", fontSize: 11 }} /><YAxis axisLine={false} tickLine={false} width={38} tick={{ fill: "#7a808a", fontSize: 11 }} /><ChartTooltip contentStyle={{ borderRadius: 8, border: "1px solid #d9dde2", boxShadow: "0 10px 30px #10182818" }} /><Area type="monotone" dataKey="rate" stroke="#2e6fe8" strokeWidth={2} fill="url(#rateFill)" /></AreaChart></ResponsiveContainer></div></Card>
       <Card className="inventory-card"><SectionHeading title="Deployed resources" detail="Objects active in this environment" /><div className="inventory-list"><button onClick={() => setPage("streams")}><span className="resource-icon blue"><Database size={17} /></span><span><strong>{data.counts.streams}</strong>Streams</span><ArrowRight size={15} /></button><button onClick={() => setPage("operators")}><span className="resource-icon violet"><GitBranch size={17} /></span><span><strong>{data.counts.operators}</strong>Operators</span><ArrowRight size={15} /></button><button onClick={() => setPage("processes")}><span className="resource-icon green"><Layers3 size={17} /></span><span><strong>{data.counts.processes}</strong>Processes</span><ArrowRight size={15} /></button></div></Card>
     </div>
-    <StreamingJobsPanel processes={data.processes} open={() => setPage("processes")} />
+    <StreamingJobsPanel processes={data.processes} open={openProcess} />
     <DurabilityPanel data={data} />
-    <Card className="table-card"><SectionHeading title="Recent runs" detail="Most recently updated executions" action={<Button variant="ghost" onClick={() => setPage("runs")}>View all <ArrowRight size={14} /></Button>} /><RunsTable runs={data.workflows.slice(0, 7)} openRun={openRun} compactTable /></Card>
+    <Card className="table-card"><SectionHeading title="Recent runs" detail="Active streaming jobs and recently updated executions" action={<Button variant="ghost" onClick={() => setPage("runs")}>View all <ArrowRight size={14} /></Button>} /><RunsTable runs={data.workflows.slice(0, 7)} processes={data.processes} openRun={openRun} openProcess={openProcess} compactTable /></Card>
     {attention.length > 0 && <Card className="attention-card"><SectionHeading title="Needs attention" detail="Unresolved execution failures" /><div>{attention.map((run) => <button key={run.workflow_id} onClick={() => openRun(run.workflow_id)}><span className="attention-icon failed"><XCircle size={16} /></span><span><strong>{run.workflow_type}</strong><small>{run.workflow_id}</small></span><Badge status="failed">Failed</Badge><ArrowRight size={15} /></button>)}</div></Card>}
     {recovered.length > 0 && <Card className="attention-card recovered-card"><SectionHeading title="Recovered automatically" detail="Failures Highwater retried without operator intervention" /><div>{recovered.map((run) => <button key={run.workflow_id} onClick={() => openRun(run.workflow_id)}><span className="attention-icon recovered"><ShieldCheck size={16} /></span><span><strong>{run.workflow_type}</strong><small>{run.workflow_id}</small></span><Badge status="completed">{run.retries} retry</Badge><ArrowRight size={15} /></button>)}</div></Card>}
   </>;
 }
 
-function StreamingJobsPanel({ processes, open }: { processes: Process[]; open: () => void }) {
+function StreamingJobsPanel({ processes, open }: { processes: Process[]; open: (id: string) => void }) {
   const jobs = [...processes].sort((left, right) => right.completed - left.completed);
-  return <Card className="attention-card recovered-card"><SectionHeading title="Streaming jobs" detail="Continuously running durable programs" action={<Button variant="ghost" onClick={open}>View processes <ArrowRight size={14} /></Button>} /><div>{jobs.map((process) => <button key={process.process_id} onClick={open}><span className="attention-icon recovered"><RadioTower size={16} /></span><span><strong>{process.process_id}</strong><small>{process.workflow_type} · {process.completed.toLocaleString()} events completed</small></span><Badge status={process.status}>{process.status === "ACTIVE" ? "Streaming" : title(process.status)}</Badge><ArrowRight size={15} /></button>)}</div></Card>;
+  return <Card className="attention-card recovered-card"><SectionHeading title="Streaming jobs" detail="Continuously running durable programs" /><div>{jobs.map((process) => <button key={process.process_id} onClick={() => open(process.process_id)}><span className="attention-icon recovered"><RadioTower size={16} /></span><span><strong>{process.process_id}</strong><small>{process.workflow_type} · {process.completed.toLocaleString()} events completed</small></span><Badge status={process.status}>{process.status === "ACTIVE" ? "Streaming" : title(process.status)}</Badge><ArrowRight size={15} /></button>)}</div></Card>;
 }
 
 function DurabilityPanel({ data }: { data: Overview }) {
@@ -158,7 +159,7 @@ function DurabilityPanel({ data }: { data: Overview }) {
 }
 
 const column = createColumnHelper<WorkflowType>();
-function RunsTable({ runs, openRun, compactTable = false }: { runs: WorkflowType[]; openRun: (id: string) => void; compactTable?: boolean }) {
+function RunsTable({ runs, processes = [], openRun, openProcess, compactTable = false }: { runs: WorkflowType[]; processes?: Process[]; openRun: (id: string) => void; openProcess?: (id: string) => void; compactTable?: boolean }) {
   const columns = useMemo(() => [
     column.accessor("workflow_id", { header: "Run", cell: ({ row }) => <button className="run-name" onClick={() => openRun(row.original.workflow_id)}><span className="run-icon"><Workflow size={15} /></span><span><strong>{row.original.workflow_type}</strong><small>{row.original.workflow_id}</small></span></button> }),
     column.accessor("status", { header: "Status", cell: (info) => <Badge status={info.getValue()}>{title(info.getValue().toLowerCase())}</Badge> }),
@@ -168,13 +169,13 @@ function RunsTable({ runs, openRun, compactTable = false }: { runs: WorkflowType
     column.accessor("updated_at", { header: "Updated", cell: (info) => relativeTime(info.getValue()) }),
   ], [openRun]);
   const table = useReactTable({ data: runs, columns, getCoreRowModel: getCoreRowModel(), getFilteredRowModel: getFilteredRowModel() });
-  return <div className="table-scroll"><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header, index) => compactTable && index === 2 ? null : <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell, index) => compactTable && index === 2 ? null : <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table>{runs.length === 0 && <Empty icon={Workflow} title="No matching runs" detail="Try a different status or search term." />}</div>;
+  return <div className="table-scroll"><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header, index) => compactTable && index === 2 ? null : <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{processes.map((process) => <tr key={`process-${process.process_id}`}><td><button className="run-name" onClick={() => openProcess?.(process.process_id)}><span className="run-icon"><RadioTower size={15} /></span><span><strong>{process.workflow_type}</strong><small>{process.process_id}</small></span></button></td><td><Badge status={process.status}>{process.status === "ACTIVE" ? "Streaming" : title(process.status)}</Badge></td>{!compactTable && <td><code className="table-code">continuous</code></td>}<td>{process.retrying ?? 0}</td><td>Continuous</td><td>Live</td></tr>)}{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell, index) => compactTable && index === 2 ? null : <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table>{runs.length === 0 && processes.length === 0 && <Empty icon={Workflow} title="No matching runs" detail="Try a different status or search term." />}</div>;
 }
 
-function RunsPage({ data, openRun, setPage }: { data: Overview; openRun: (id: string) => void; setPage: (page: Page) => void }) {
+function RunsPage({ data, openRun, openProcess }: { data: Overview; openRun: (id: string) => void; openProcess: (id: string) => void }) {
   const [query, setQuery] = useState(""); const [status, setStatus] = useState("all");
   const runs = data.workflows.filter((run) => (status === "all" || run.status === status) && `${run.workflow_id} ${run.workflow_type}`.toLowerCase().includes(query.toLowerCase()));
-  return <><PageHeader eyebrow="Execution" title="Runs" description="Inspect continuously running streaming jobs and bounded durable executions." /><StreamingJobsPanel processes={data.processes} open={() => setPage("processes")} /><Card className="resource-panel"><SectionHeading title="Execution history" detail="Bounded runs with retained event history" /><div className="toolbar"><div className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search runs" /></div><SelectField label="Filter status" value={status} onValueChange={setStatus} options={[{ value: "all", label: "All statuses" }, { value: "RUNNING", label: "Running" }, { value: "COMPLETED", label: "Completed" }, { value: "FAILED", label: "Failed" }]} /><span className="toolbar-count">{runs.length} runs</span></div><RunsTable runs={runs} openRun={openRun} /></Card></>;
+  return <><PageHeader eyebrow="Execution" title="Runs" description="Inspect continuously running streaming jobs and bounded durable executions." /><Card className="resource-panel"><SectionHeading title="Execution history" detail="Streaming jobs and bounded runs with retained state" /><div className="toolbar"><div className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search runs" /></div><SelectField label="Filter status" value={status} onValueChange={setStatus} options={[{ value: "all", label: "All statuses" }, { value: "RUNNING", label: "Running" }, { value: "COMPLETED", label: "Completed" }, { value: "FAILED", label: "Failed" }]} /><span className="toolbar-count">{runs.length + data.processes.length} runs</span></div><RunsTable runs={runs} processes={data.processes} openRun={openRun} openProcess={openProcess} /></Card></>;
 }
 
 function StreamsPage({ streams }: { streams: StreamType[] }) {
@@ -185,9 +186,16 @@ function OperatorsPage({ operators, openRun }: { operators: Operator[]; openRun:
   return <><PageHeader eyebrow="Data plane" title="Operators" description="Durable event-time transformations deployed to this environment." /><Card className="resource-panel"><div className="operator-list">{operators.map((operator) => <article className="operator-row" key={operator.operator_id}><span className="large-resource-icon violet"><GitBranch size={19} /></span><div className="operator-identity"><strong>{operator.operator_id}</strong><span><Badge status={operator.status}>{title(operator.status)}</Badge><small>{title(operator.kind)}{operator.join_type ? ` · ${operator.join_type}` : ""}</small></span></div><div className="operator-flow"><div>{operator.input.map((input, index) => <code key={input}>{input}{index === 0 && operator.probe_watermark != null ? ` · wm ${operator.probe_watermark.toFixed(1)}` : ""}{index === 1 && operator.version_watermark != null ? ` · wm ${operator.version_watermark.toFixed(1)}` : ""}</code>)}</div><ArrowRight size={16} /><code>{operator.workflow_type}</code></div><dl><div><dt>Matched</dt><dd>{operator.matched?.toLocaleString() ?? "—"}</dd></div><div><dt>Emitted</dt><dd>{operator.emitted?.toLocaleString() ?? "—"}</dd></div></dl>{operator.latest_workflow_id && <Button variant="secondary" onClick={() => openRun(operator.latest_workflow_id!)}>Trace <ArrowRight size={13} /></Button>}</article>)}</div>{operators.length === 0 && <Empty icon={GitBranch} title="No operators" detail="Deploy an example to see its streaming topology." />}</Card></>;
 }
 
-function ProcessesPage({ processes }: { processes: Process[] }) {
+function ProcessesPage({ processes, openProcess }: { processes: Process[]; openProcess: (id: string) => void }) {
   const ordered = [...processes].sort((left, right) => right.completed - left.completed);
-  return <><PageHeader eyebrow="Isolation" title="Processes" description="Continuously running durable programs with per-key concurrency and backpressure." /><div className="resource-card-grid">{ordered.map((process) => { const retrying = process.retrying ?? 0; const used = process.pending + process.running + retrying; return <Card className="resource-card process-card" key={process.process_id}><div className="resource-card-head"><span className="large-resource-icon green"><Layers3 size={20} /></span><Badge status={process.status}>{process.status === "ACTIVE" ? "Streaming" : title(process.status)}</Badge></div><h3>{process.process_id}</h3><p className="resource-description">{process.workflow_type}</p><div className="queue-bar"><span style={{ width: `${Math.min(100, (used / Math.max(1, process.mailbox_capacity)) * 100)}%` }} /></div><div className="queue-label"><span>Mailbox utilization</span><b>{used} / {process.mailbox_capacity}</b></div><dl><div><dt>Pending</dt><dd>{process.pending}</dd></div><div><dt>In flight</dt><dd>{process.running}</dd></div><div><dt>Retrying</dt><dd>{retrying}</dd></div><div><dt>Quarantined</dt><dd>{process.quarantined ?? 0}</dd></div><div><dt>Completed</dt><dd>{process.completed}</dd></div><div><dt>Failed</dt><dd>{process.failed}</dd></div></dl><div className="resource-footer"><Network size={14} />Continuously polling · {process.max_concurrent_keys} normal · {process.retry_concurrency ?? 0} retry slots</div></Card>; })}</div>{processes.length === 0 && <Card><Empty icon={Layers3} title="No keyed processes" detail="Run the account balance example to deploy one." /></Card>}</>;
+  return <><PageHeader eyebrow="Isolation" title="Processes" description="Continuously running durable programs with per-key concurrency and backpressure." /><div className="resource-card-grid">{ordered.map((process) => { const retrying = process.retrying ?? 0; const used = process.pending + process.running + retrying; return <Card className="resource-card process-card" key={process.process_id}><div className="resource-card-head"><span className="large-resource-icon green"><Layers3 size={20} /></span><Badge status={process.status}>{process.status === "ACTIVE" ? "Streaming" : title(process.status)}</Badge></div><h3>{process.process_id}</h3><p className="resource-description">{process.workflow_type}</p><div className="queue-bar"><span style={{ width: `${Math.min(100, (used / Math.max(1, process.mailbox_capacity)) * 100)}%` }} /></div><div className="queue-label"><span>Mailbox utilization</span><b>{used} / {process.mailbox_capacity}</b></div><dl><div><dt>Pending</dt><dd>{process.pending}</dd></div><div><dt>In flight</dt><dd>{process.running}</dd></div><div><dt>Retrying</dt><dd>{retrying}</dd></div><div><dt>Quarantined</dt><dd>{process.quarantined ?? 0}</dd></div><div><dt>Completed</dt><dd>{process.completed}</dd></div><div><dt>Failed</dt><dd>{process.failed}</dd></div></dl><Button variant="secondary" onClick={() => openProcess(process.process_id)}>View job <ArrowRight size={13} /></Button><div className="resource-footer"><Network size={14} />Continuously polling · {process.max_concurrent_keys} normal · {process.retry_concurrency ?? 0} retry slots</div></Card>; })}</div>{processes.length === 0 && <Card><Empty icon={Layers3} title="No keyed processes" detail="Run the account balance example to deploy one." /></Card>}</>;
+}
+
+function ProcessDetailPage({ process, onBack }: { process?: Process; onBack: () => void }) {
+  if (!process) return <><Button variant="ghost" onClick={onBack}><ArrowLeft size={15} />Back to processes</Button><Card><div className="sheet-error"><TriangleAlert size={18} />Streaming job not found.</div></Card></>;
+  const retrying = process.retrying ?? 0;
+  const active = process.status === "ACTIVE";
+  return <div className="run-detail-page"><button className="back-link" onClick={onBack}><ArrowLeft size={14} />Processes</button><PageHeader eyebrow="Streaming job" title={process.process_id} description={process.workflow_type} actions={<Badge status={process.status}>{active ? "Streaming" : title(process.status)}</Badge>} /><div className="run-summary routed"><div><span>Status</span><strong>{active ? "Continuously running" : title(process.status)}</strong></div><div><span>Completed events</span><strong>{process.completed.toLocaleString()}</strong></div><div><span>In flight</span><strong>{process.running.toLocaleString()}</strong></div><div><span>Pending</span><strong>{process.pending.toLocaleString()}</strong></div><div><span>Failed</span><strong>{process.failed.toLocaleString()}</strong></div></div><Card className="durability-card"><SectionHeading title="Execution controls" detail="Per-key isolation, retry capacity, and durable mailbox limits" /><div className="durability-grid"><div><span className="resource-icon green"><Network size={17} /></span><p>Concurrency</p><strong>{process.max_concurrent_keys.toLocaleString()} keys</strong><small>{process.retry_concurrency.toLocaleString()} isolated retry slots</small></div><div><span className="resource-icon blue"><Database size={17} /></span><p>Durable mailbox</p><strong>{(process.pending + process.running + retrying).toLocaleString()} / {process.mailbox_capacity.toLocaleString()}</strong><small>{process.quarantined.toLocaleString()} quarantined</small></div><div><span className="resource-icon violet"><RefreshCw size={17} /></span><p>Retry policy</p><strong>{process.max_attempts} attempts</strong><small>{retrying.toLocaleString()} retrying now</small></div></div></Card></div>;
 }
 
 function QuickstartPage() {
@@ -291,6 +299,9 @@ export default function App() {
   const selectedRun = location.pathname === "/runs/detail"
     ? new URLSearchParams(location.search).get("run") || undefined
     : undefined;
+  const selectedProcess = location.pathname === "/processes/detail"
+    ? new URLSearchParams(location.search).get("process") || undefined
+    : undefined;
   const [credential, setCredential] = useState(() => sessionStorage.getItem("highwater_demo_login") || "");
   const [data, setData] = useState<Overview>(); const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false); const [trend, setTrend] = useState<TrendPoint[]>([]); const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -301,6 +312,13 @@ export default function App() {
   const closeRun = useCallback(() => {
     const from = (location.state as { from?: string } | null)?.from;
     navigate(from || paths.runs, { replace: true });
+  }, [location.state, navigate]);
+  const openProcess = useCallback((id: string) => navigate(`/processes/detail?process=${encodeURIComponent(id)}`, {
+    state: { from: `${location.pathname}${location.search}` },
+  }), [location.pathname, location.search, navigate]);
+  const closeProcess = useCallback(() => {
+    const from = (location.state as { from?: string } | null)?.from;
+    navigate(from || paths.processes, { replace: true });
   }, [location.state, navigate]);
   const load = useCallback(async (login = credential) => {
     if (!login) return;
@@ -326,7 +344,7 @@ export default function App() {
   }, [credential]);
   useEffect(() => { if (!credential) return; load().catch(() => undefined); const timer = window.setInterval(() => load().catch(() => undefined), 5000); return () => window.clearInterval(timer); }, [credential, load]);
   useEffect(() => {
-    if (location.pathname === "/" || (!Object.values(paths).includes(location.pathname) && location.pathname !== "/runs/detail")) {
+    if (location.pathname === "/" || (!Object.values(paths).includes(location.pathname) && location.pathname !== "/runs/detail" && location.pathname !== "/processes/detail")) {
       navigate(paths.overview, { replace: true });
     }
   }, [location.pathname, navigate]);
@@ -338,12 +356,13 @@ export default function App() {
     {error && <div className="connection-banner"><TriangleAlert size={15} /><span>{error}</span><button onClick={() => load().catch(() => undefined)}>Retry</button></div>}
     {!data ? <div className="page-loader"><RefreshCw className="spin" />Connecting to the demo cluster…</div> : <>
       <div className="live-refresh"><span className={!error ? "online" : "offline"} />{error ? "Disconnected" : `Live · updated ${relativeTime(data.generated_at)}`}<button onClick={() => load().catch(() => undefined)} disabled={refreshing}><RefreshCw className={refreshing ? "spin" : ""} size={13} />Refresh</button></div>
-      {page === "overview" && <OverviewPage data={data} trend={trend} rate={rate} openRun={openRun} setPage={setPage} />}
+      {page === "overview" && <OverviewPage data={data} trend={trend} rate={rate} openRun={openRun} openProcess={openProcess} setPage={setPage} />}
       {page === "runs" && selectedRun && <RunDetailPage id={selectedRun} credential={credential} onBack={closeRun} />}
-      {page === "runs" && !selectedRun && <RunsPage data={data} openRun={openRun} setPage={setPage} />}
+      {page === "runs" && !selectedRun && <RunsPage data={data} openRun={openRun} openProcess={openProcess} />}
       {page === "streams" && <StreamsPage streams={data.streams} />}
       {page === "operators" && <OperatorsPage operators={data.operators} openRun={openRun} />}
-      {page === "processes" && <ProcessesPage processes={data.processes} />}
+      {page === "processes" && selectedProcess && <ProcessDetailPage process={data.processes.find((process) => process.process_id === selectedProcess)} onBack={closeProcess} />}
+      {page === "processes" && !selectedProcess && <ProcessesPage processes={data.processes} openProcess={openProcess} />}
       {page === "quickstart" && <QuickstartPage />}
     </>}
   </Shell>;

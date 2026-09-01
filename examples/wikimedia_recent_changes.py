@@ -37,7 +37,7 @@ class RecentChange:
 @streaming.process(
     key="wiki",
     event_time="occurred_at",
-    build_id="wikimedia-print-sink-v2",
+    build_id="wikimedia-print-sink-v1",
 )
 @dataclass
 class WikimediaPrintSink:

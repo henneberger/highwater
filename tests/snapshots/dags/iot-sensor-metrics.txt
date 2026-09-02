@@ -1,0 +1,14 @@
+dag iot-sensor-metrics
+
+streams
+  alert-changes [watermark_mode=source_managed]
+  sensor-readings [allowed_lateness=5]
+
+operators
+  high-temperature [filter] workflow=HighTemperatureAlertWorkflow predicate=temperature greater_than 100
+  sensor-sliding-max [window aggregate] workflow=SensorWindowMaxWorkflow aggregation=max size=30s slide=10s start=0 value=temperature
+
+edges
+  high-temperature -> alert-changes [changelog]
+  sensor-readings -> high-temperature [records]
+  sensor-readings -> sensor-sliding-max [keyed event-time records]

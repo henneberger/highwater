@@ -156,6 +156,8 @@ class ProcessSpec:
     build_id: str
     state_version: int = 1
     migrations_from: tuple[int, ...] = ()
+    versioned_streams: tuple[str, ...] = ()
+    versioned_lookups: tuple[tuple[str, str], ...] = ()
     key: str | None = None
     event_time: str | None = None
     event_time_gate: EventTimeGate = EventTimeGate.IMMEDIATE
@@ -194,6 +196,16 @@ class ProcessSpec:
             raise ValueError("key must not be empty")
         if self.event_time is not None and not self.event_time.strip():
             raise ValueError("event_time must not be empty")
+        if any(not stream.strip() for stream in self.versioned_streams):
+            raise ValueError("versioned streams must not be empty")
+        if len(set(self.versioned_streams)) != len(self.versioned_streams):
+            raise ValueError("versioned streams must be unique")
+        if any(not stream.strip() or not key.strip() for stream, key in self.versioned_lookups):
+            raise ValueError("versioned lookup streams and keys must not be empty")
+        if len(set(self.versioned_lookups)) != len(self.versioned_lookups):
+            raise ValueError("versioned lookups must be unique")
+        if any(stream not in self.versioned_streams for stream, _ in self.versioned_lookups):
+            raise ValueError("versioned lookup streams must be declared dependencies")
 
 
 @dataclass(frozen=True)

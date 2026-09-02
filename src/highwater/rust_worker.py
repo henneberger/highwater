@@ -9,6 +9,7 @@ import os
 import time
 import traceback
 import uuid
+from contextlib import nullcontext
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -17,6 +18,7 @@ from . import activity_context
 from .errors import NonRetryableError
 from .model import Event
 from .registry import Registry
+from .streaming import _versioned_runtime
 from .workflow_runner import WorkflowRunner
 
 
@@ -35,7 +37,8 @@ class _RemoteActivityClient:
         try:
             with urlopen(request, timeout=15) as response:
                 return bool(json.loads(response.read())["accepted"])
-        except HTTPError:
+        except HTTPError as error:
+            error.close()
             return False
 
 class RustWorker:
@@ -76,7 +79,7 @@ class RustWorker:
         self._process_only = process_only
         self._execution_token = execution_token
         default_process_poll_width = (
-            8
+            16
             if any(
                 getattr(definition, "__highwater_process_batch_run__", None) is not None
                 for definition in registry.workflows.values()
@@ -99,6 +102,7 @@ class RustWorker:
                 return json.loads(response.read() or b"{}")
         except HTTPError as error:
             message = json.loads(error.read() or b"{}").get("error", str(error))
+            error.close()
             raise RuntimeError(message) from error
 
     def _poll_body(self) -> dict[str, Any]:
@@ -110,6 +114,41 @@ class RustWorker:
             "build_ids": self.registry.build_ids(),
             "lease_seconds": self.lease_seconds,
         }
+
+    def _resolve_versioned(
+        self,
+        process_id: str,
+        build_id: str,
+        stream: str,
+        key: str,
+        as_of: float,
+    ) -> Any:
+        body = self._poll_body()
+        body.update({
+            "process_id": process_id,
+            "build_id": build_id,
+            "stream": stream,
+            "key": key,
+            "as_of": as_of,
+        })
+        response = self._request("/internal/v1/versioned-lookups", body)
+        return response["value"] if response["found"] else None
+
+    def _versioned_resolver_for(self, envelope: dict[str, Any]):
+        process_id = envelope["process_id"]
+        build_id = envelope["build_id"]
+        return lambda stream, key, as_of: self._resolve_versioned(
+            process_id, build_id, stream, key, as_of
+        )
+
+    def _versioned_runtime_for(
+        self,
+        definition: type[Any],
+        envelope: dict[str, Any],
+    ):
+        if not getattr(definition, "__highwater_versioned_streams__", ()):
+            return nullcontext()
+        return _versioned_runtime(self._versioned_resolver_for(envelope))
 
     @staticmethod
     def _events(values: list[dict[str, Any]]) -> list[Event]:
@@ -134,14 +173,26 @@ class RustWorker:
                 "commands": [],
             }
             try:
-                result = await self.runner.activate(
-                    activation["workflow_id"], activation["workflow_type"], events,
-                )
-                completion["history_event_id"] = result.history_event_id
-                completion["commands"] = [
-                    {"type": command.type, "attributes": command.attributes}
-                    for command in result.commands
-                ]
+                process_run = getattr(definition, "__highwater_process_run__", None)
+                if process_run is not None:
+                    envelope = events[0].data["args"][0]
+                    with self._versioned_runtime_for(definition, envelope):
+                        result = await process_run(
+                            definition(), envelope
+                        )
+                    completion["commands"] = [{
+                        "type": "COMPLETE_WORKFLOW",
+                        "attributes": {"result": result},
+                    }]
+                else:
+                    result = await self.runner.activate(
+                        activation["workflow_id"], activation["workflow_type"], events,
+                    )
+                    completion["history_event_id"] = result.history_event_id
+                    completion["commands"] = [
+                        {"type": command.type, "attributes": command.attributes}
+                        for command in result.commands
+                    ]
             except Exception as error:
                 completion["failure"] = "".join(
                     traceback.format_exception_only(type(error), error)
@@ -158,10 +209,12 @@ class RustWorker:
         else:
             event_lists = [self._events(activation["history"]) for activation in activations]
             try:
-                results = await batch_run(
-                    definition(),
-                    [events[0].data["args"][0] for events in event_lists],
-                )
+                envelopes = [events[0].data["args"][0] for events in event_lists]
+                with self._versioned_runtime_for(definition, envelopes[0]):
+                    results = await batch_run(
+                        definition(),
+                        envelopes,
+                    )
             except Exception as error:
                 failure = "".join(
                     traceback.format_exception_only(type(error), error)
@@ -224,16 +277,57 @@ class RustWorker:
             asyncio.create_task(self._renew_process_batch(batch, stop))
             for batch, stop in zip(batches, renewal_stops, strict=True)
         ]
-        completions = []
-        for batch in batches:
+        items_by_batch: list[list[dict[str, Any] | None]] = [
+            [None] * len(batch["envelopes"])
+            for batch in batches
+        ]
+        batch_groups: dict[
+            tuple[str, str, str],
+            list[tuple[int, int, dict[str, Any]]],
+        ] = {}
+        for batch_index, batch in enumerate(batches):
             definition = self.registry.workflows[batch["workflow_type"]]
             max_size = getattr(definition, "__highwater_batch_max_size__", 64)
-            items = []
             envelopes = batch["envelopes"]
+            batch_run = getattr(definition, "__highwater_process_batch_run__", None)
+            if batch_run is not None:
+                identity = (
+                    batch["process_id"],
+                    batch["workflow_type"],
+                    batch["build_id"],
+                )
+                batch_groups.setdefault(identity, []).extend(
+                    (batch_index, envelope_index, envelope)
+                    for envelope_index, envelope in enumerate(envelopes)
+                )
+                continue
             for offset in range(0, len(envelopes), max_size):
                 chunk = envelopes[offset:offset + max_size]
-                batch_run = getattr(definition, "__highwater_process_batch_run__", None)
-                items.extend(await self._execute_process_chunk(definition, chunk, batch_run))
+                results = await self._execute_process_chunk(definition, chunk, None)
+                items_by_batch[batch_index][offset:offset + len(results)] = results
+
+        for (_, workflow_type, _), grouped in batch_groups.items():
+            definition = self.registry.workflows[workflow_type]
+            max_size = getattr(definition, "__highwater_batch_max_size__", 64)
+            batch_run = getattr(definition, "__highwater_process_batch_run__")
+            for offset in range(0, len(grouped), max_size):
+                selected = grouped[offset:offset + max_size]
+                results = await self._execute_process_chunk(
+                    definition,
+                    [envelope for _, _, envelope in selected],
+                    batch_run,
+                )
+                for (batch_index, envelope_index, _), result in zip(
+                    selected,
+                    results,
+                    strict=True,
+                ):
+                    items_by_batch[batch_index][envelope_index] = result
+
+        completions = []
+        for batch, items in zip(batches, items_by_batch, strict=True):
+            if any(item is None for item in items):
+                raise RuntimeError("process batch execution produced an incomplete result set")
             completions.append({
                 "protocol_version": 1,
                 "lease_token": batch["lease_token"],
@@ -271,7 +365,8 @@ class RustWorker:
 
             async def execute(envelope: dict[str, Any]) -> dict[str, Any]:
                 try:
-                    return {"result": await run(definition(), envelope)}
+                    with self._versioned_runtime_for(definition, envelope):
+                        return {"result": await run(definition(), envelope)}
                 except Exception as error:
                     return {"failure": "".join(
                         traceback.format_exception_only(type(error), error)
@@ -280,7 +375,8 @@ class RustWorker:
             return await asyncio.gather(*(execute(envelope) for envelope in envelopes))
 
         try:
-            results = await batch_run(definition(), envelopes)
+            with self._versioned_runtime_for(definition, envelopes[0]):
+                results = await batch_run(definition(), envelopes)
             return [{"result": result} for result in results]
         except Exception as error:
             if len(envelopes) == 1:

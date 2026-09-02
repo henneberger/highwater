@@ -252,6 +252,11 @@ pub(crate) fn append_stream_record_transaction(
         )?;
         if late { "accepted_late" } else { "accepted" }
     };
+    if disposition.starts_with("accepted")
+        && record.key.as_deref().is_some_and(|key| !key.is_empty())
+    {
+        transaction.put(versioned_record_key(stream, &record), &record)?;
+    }
     if let Some(event_id) = effective_event_id.as_deref() {
         transaction.put(stream_event_id_key(stream, event_id), &record)?;
     }
@@ -452,6 +457,67 @@ pub(crate) async fn read_stream_records(
         .collect();
     records.sort_by_key(|record| record.sequence);
     Ok(Json(records))
+}
+
+pub(crate) async fn resolve_versioned_lookup(
+    State(app): State<AppState>,
+    Json(request): Json<VersionedLookupRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    app.authorize_poll(&request.poll)?;
+    if request.stream.trim().is_empty()
+        || request.key.is_empty()
+        || !request.as_of.is_finite()
+        || request.process_id.trim().is_empty()
+        || request.build_id.trim().is_empty()
+    {
+        return Err(ApiError(anyhow!(
+            "versioned lookup process, build, stream, key, and event time are invalid"
+        )));
+    }
+    let process = app
+        .store
+        .get::<DurableProcess>(&process_key(&request.process_id))?
+        .ok_or_else(|| ApiError(anyhow!("process not found: {}", request.process_id)))?;
+    if !request.poll.build_ids.contains(&request.build_id)
+        || !process.versioned_streams.contains(&request.stream)
+    {
+        return Err(ApiError(anyhow!(
+            "process {} is not authorized for versioned stream {}",
+            request.process_id,
+            request.stream,
+        )));
+    }
+    let config = app
+        .store
+        .get::<StreamConfig>(&stream_config_key(&request.stream))?
+        .ok_or_else(|| ApiError(anyhow!("stream not found: {}", request.stream)))?;
+    let state = app
+        .store
+        .get::<StreamState>(&stream_state_key(&request.stream))?
+        .ok_or_else(|| ApiError(anyhow!("stream state not found: {}", request.stream)))?;
+    let frontier = completeness_frontier(&config, &state);
+    if !frontier.is_some_and(|value| value >= request.as_of) {
+        return Err(ApiError(anyhow!(
+            "versioned stream {} is not complete through {}",
+            request.stream,
+            request.as_of,
+        )));
+    }
+    let records = app
+        .store
+        .scan::<StreamRecord>(&versioned_record_prefix(&request.stream, &request.key))?
+        .into_iter()
+        .map(|(_, record)| record)
+        .collect::<Vec<_>>();
+    let version = latest_version_as_of(&records, request.as_of);
+    let value = version
+        .filter(|record| record.kind.is_addition())
+        .map(|record| record.value.clone());
+    Ok(Json(json!({
+        "found": value.is_some(),
+        "value": value,
+        "event_time": version.map(|record| record.event_time),
+    })))
 }
 
 pub(crate) async fn read_late_stream_records(

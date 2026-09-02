@@ -756,6 +756,14 @@ pub(crate) fn refresh_deduplicates(
             } else {
                 let workflow_id = emit_deduplicated_record(transaction, &operator, &record)?;
                 transaction.put(canonical_key, &record)?;
+                append_operator_change(
+                    transaction,
+                    &operator.operator_id,
+                    record.key.clone(),
+                    record.event_time,
+                    record.kind,
+                    record.value.clone(),
+                )?;
                 operator.records_emitted += 1;
                 (record.clone(), Some(workflow_id))
             };

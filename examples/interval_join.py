@@ -5,7 +5,8 @@ import asyncio
 import json
 import uuid
 
-from highwater import ChangeKind, Client, IntervalJoinSpec, StreamOptions, workflow
+from highwater import ChangeKind, Client, StreamOptions, workflow
+from highwater.dag import Dag
 
 
 @workflow.defn
@@ -29,25 +30,29 @@ class IntervalJoinWorkflow:
         }
 
 
+def topology(logins: str, purchases: str, join_id: str) -> Dag:
+    options = StreamOptions(max_out_of_orderness=2, allowed_lateness=1)
+    return (
+        Dag(join_id)
+        .stream(logins, options)
+        .stream(purchases, options)
+        .interval_join(
+            join_id,
+            left=logins,
+            right=purchases,
+            workflow=IntervalJoinWorkflow,
+            lower=0,
+            upper=5,
+        )
+    )
 async def main(target: str) -> None:
     client = Client(target)
     suffix = uuid.uuid4().hex[:8]
     logins = f"logins-{suffix}"
     purchases = f"interval-purchases-{suffix}"
     join_id = f"login-purchases-{suffix}"
-    options = StreamOptions(max_out_of_orderness=2, allowed_lateness=1)
-    await client.create_stream(logins, options=options)
-    await client.create_stream(purchases, options=options)
-    join = IntervalJoinSpec(
-        operator_id=join_id,
-        left_stream=logins,
-        right_stream=purchases,
-        workflow=IntervalJoinWorkflow,
-        lower_bound=0,
-        upper_bound=5,
-    )
-    await client.deploy(join)
-    await client.deploy(join)
+    await topology(logins, purchases, join_id).deploy(client)
+    await topology(logins, purchases, join_id).deploy(client)
 
     await client.publish_event(logins, {
         "login_id": "login-a",

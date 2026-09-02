@@ -9,13 +9,25 @@ A watermark `W` means an input does not expect another on-time event at or befor
 
 ## Gates
 
-An event-time gate turns progress into an ordinary scheduling condition:
+An event-time gate keeps a Process event pending until its input is complete through that event's timestamp:
 
 ```python
-await streaming.wait_until(streaming.event_time >= deadline)
+from dataclasses import dataclass
+from highwater import streaming
+
+@streaming.process(
+    key="order_id",
+    event_time="occurred_at",
+    wait_until=streaming.complete,
+)
+@dataclass
+class Order:
+    @streaming.event
+    async def apply(self, event):
+        return {"order_id": event.order_id, "complete": True}
 ```
 
-The Process becomes runnable when the watermark reaches `deadline`. It consumes no execution capacity while waiting.
+The Process becomes runnable when the input watermark reaches `occurred_at`. It consumes no execution capacity while waiting.
 
 ## Idleness
 

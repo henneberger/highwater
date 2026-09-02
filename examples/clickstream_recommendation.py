@@ -7,13 +7,12 @@ import uuid
 
 from highwater import (
     Client,
-    IntervalJoinSpec,
     LatePolicy,
     StreamOptions,
-    TemporalJoinSpec,
     TemporalJoinType,
     workflow,
 )
+from highwater.dag import Dag
 
 
 @workflow.defn
@@ -42,6 +41,37 @@ class ContentAtClickWorkflow:
         }
 
 
+def topology(
+    visits: str,
+    content_clicks: str,
+    content: str,
+    co_visits: str,
+    content_at_click: str,
+) -> Dag:
+    options = StreamOptions(allowed_lateness=5, late_policy=LatePolicy.SIDE_OUTPUT)
+    return (
+        Dag("clickstream-recommendation")
+        .stream(visits, options)
+        .stream(content_clicks, options)
+        .stream(content, options)
+        .interval_join(
+            co_visits,
+            left=visits,
+            right=visits,
+            workflow=CoVisitRecommendationWorkflow,
+            lower=0,
+            upper=600,
+        )
+        .temporal_join(
+            content_at_click,
+            probe=content_clicks,
+            versions=content,
+            workflow=ContentAtClickWorkflow,
+            join_type=TemporalJoinType.LEFT,
+        )
+    )
+
+
 async def main(target: str) -> None:
     client = Client(target)
     suffix = uuid.uuid4().hex[:8]
@@ -51,25 +81,13 @@ async def main(target: str) -> None:
     co_visits = f"co-visits-{suffix}"
     content_at_click = f"content-at-click-{suffix}"
 
-    options = StreamOptions(allowed_lateness=5, late_policy=LatePolicy.SIDE_OUTPUT)
-    for stream in (visits, content_clicks, content):
-        await client.create_stream(stream, options=options)
-
-    await client.deploy(IntervalJoinSpec(
-        operator_id=co_visits,
-        left_stream=visits,
-        right_stream=visits,
-        workflow=CoVisitRecommendationWorkflow,
-        lower_bound=0,
-        upper_bound=600,
-    ))
-    await client.deploy(TemporalJoinSpec(
-        operator_id=content_at_click,
-        probe_stream=content_clicks,
-        version_stream=content,
-        workflow=ContentAtClickWorkflow,
-        join_type=TemporalJoinType.LEFT,
-    ))
+    await topology(
+        visits,
+        content_clicks,
+        content,
+        co_visits,
+        content_at_click,
+    ).deploy(client)
 
     content_rows = [
         ("/home", {"title": "Home", "embedding_ref": "vectors/home-v1"}),

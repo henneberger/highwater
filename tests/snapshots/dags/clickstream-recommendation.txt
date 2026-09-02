@@ -1,0 +1,16 @@
+dag clickstream-recommendation
+
+streams
+  content-clicks [allowed_lateness=5]
+  content-versions [allowed_lateness=5]
+  visits [allowed_lateness=5]
+
+operators
+  co-visits [interval join] workflow=CoVisitRecommendationWorkflow type=inner bounds=[0s,600s]
+  content-at-click [temporal join] workflow=ContentAtClickWorkflow type=left as_of=probe.event_time
+
+edges
+  content-clicks -> content-at-click [probe]
+  content-versions -> content-at-click [versions key=record.key]
+  visits -> co-visits [left key=record.key]
+  visits -> co-visits [right key=record.key]

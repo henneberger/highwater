@@ -49,6 +49,26 @@ pub(crate) fn stream_record_key(stream: &str, partition: u32, offset: u64) -> St
         stream_record_prefix(stream)
     )
 }
+pub(crate) fn versioned_record_prefix(stream: &str, key: &str) -> String {
+    format!("versioned-record/{}/{}/", encoded(stream), encoded(key))
+}
+pub(crate) fn versioned_record_key(stream: &str, record: &StreamRecord) -> String {
+    format!(
+        "{}{:016x}/{:020}",
+        versioned_record_prefix(
+            stream,
+            record
+                .key
+                .as_deref()
+                .expect("versioned record key validated"),
+        ),
+        ordered_f64_bits(record.event_time),
+        record.sequence,
+    )
+}
+pub(crate) fn versioned_index_ready_key(stream: &str) -> String {
+    format!("versioned-index-ready/{}", encoded(stream))
+}
 pub(crate) fn stream_batch_key(stream: &str, last_sequence: u64) -> String {
     format!("stream-batch/{}/{last_sequence:020}", encoded(stream),)
 }

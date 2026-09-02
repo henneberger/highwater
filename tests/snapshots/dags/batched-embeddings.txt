@@ -1,0 +1,10 @@
+dag batched-embeddings
+
+streams
+  embeddings-input [inferred]
+
+operators
+  embeddings [process] workflow=BatchedEmbeddings state=v1 key=document_id gate=immediate batch=128/0.025s
+
+edges
+  embeddings-input -> embeddings [events key=document_id]

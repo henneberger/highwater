@@ -23,6 +23,28 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--help" | "-h" => {
+                println!(
+                    "highwater-server\n\n\
+                     Options:\n\
+                       --listen ADDRESS\n\
+                       --execution-listen ADDRESS\n\
+                       --state-dir PATH\n\
+                       --object-store-dir PATH\n\
+                       --journal URI\n\
+                       --node-id ID\n\
+                       --advertise-endpoint URL\n\
+                       --data-plane-only\n\
+                       --execution-identity-file PATH\n\
+                       --cluster-token-file PATH\n\
+                       --api-token-file PATH\n\
+                       --process-partitions IDS\n\
+                       --key-groups COUNT\n\
+                       --lease-seconds SECONDS\n\
+                       --log-shards COUNT"
+                );
+                return Ok(());
+            }
             "--listen" => listen = arguments.next().context("--listen requires a value")?,
             "--execution-listen" => {
                 execution_listen = Some(
@@ -250,6 +272,10 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
         .route(
             "/internal/v1/processes/{process_id}/partitions/{partition}/events",
             post(append_remote_process_records),
+        )
+        .route(
+            "/internal/v1/versioned-lookups",
+            post(resolve_versioned_lookup),
         )
         .route("/internal/v1/activity-tasks/poll", post(poll_activity))
         .route(

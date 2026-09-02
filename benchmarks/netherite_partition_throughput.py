@@ -172,6 +172,7 @@ def main() -> None:
     parser.add_argument("--handler", choices=("batch", "event"), default="batch")
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--minimum-throughput", type=float, default=0)
     arguments = parser.parse_args()
     if arguments.events <= 0:
         parser.error("--events must be positive")
@@ -184,7 +185,7 @@ def main() -> None:
     results = [benchmark(arguments) for _ in range(arguments.runs)]
     completed = [result["completed_events_per_second"] for result in results]
     admitted = [result["admission_events_per_second"] for result in results]
-    print(json.dumps({
+    report = {
         "runs": results,
         "summary": {
             "run_count": arguments.runs,
@@ -198,7 +199,14 @@ def main() -> None:
             "maximum_completed_events_per_second": max(completed),
             "durability_boundary": results[0]["durability_boundary"],
         },
-    }, indent=2, sort_keys=True))
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if report["summary"]["minimum_completed_events_per_second"] < arguments.minimum_throughput:
+        raise SystemExit(
+            "completed throughput "
+            f"{report['summary']['minimum_completed_events_per_second']:.0f} events/s "
+            f"is below required {arguments.minimum_throughput:.0f} events/s"
+        )
 
 
 if __name__ == "__main__":

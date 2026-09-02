@@ -19,9 +19,10 @@ from examples.reliable_activities import (
     release_inventory,
     reserve_inventory,
 )
-from examples.temporal_join import TemporalJoinWorkflow
+from examples.temporal_join import PurchaseCheck
 from examples.interval_join import IntervalJoinWorkflow
 from examples.iot_sensor_metrics import HighTemperatureAlertWorkflow, SensorWindowMaxWorkflow
+from examples.shopping_assistant import ShoppingAssistant
 from examples.wikimedia_recent_changes import WikimediaPrintSink
 
 __all__ = [
@@ -34,7 +35,8 @@ __all__ = [
     "OrderWorkflow",
     "PageWorkflow",
     "PagedAggregationWorkflow",
-    "TemporalJoinWorkflow",
+    "PurchaseCheck",
+    "ShoppingAssistant",
     "IntervalJoinWorkflow",
     "WindowSumWorkflow",
     "EventTimeGateWorkflow",

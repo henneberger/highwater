@@ -279,6 +279,8 @@ pub(crate) struct CreateProcessRequest {
     pub(crate) build_id: String,
     #[serde(default)]
     pub(crate) migrations_from: Vec<u32>,
+    #[serde(default)]
+    pub(crate) versioned_streams: Vec<String>,
     #[serde(default = "default_task_queue")]
     pub(crate) task_queue: String,
     #[serde(default = "default_process_gate")]
@@ -396,6 +398,8 @@ pub(crate) struct DurableProcess {
     pub(crate) event_time_field: Option<String>,
     pub(crate) state_version: u32,
     pub(crate) active_build_id: String,
+    #[serde(default)]
+    pub(crate) versioned_streams: Vec<String>,
     pub(crate) task_queue: String,
     pub(crate) event_time_gate: EventTimeGate,
     pub(crate) max_concurrent_keys: u32,
@@ -418,6 +422,17 @@ pub(crate) struct DurableProcess {
     pub(crate) retrying: u64,
     #[serde(default)]
     pub(crate) quarantined: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct VersionedLookupRequest {
+    #[serde(flatten)]
+    pub(crate) poll: PollRequest,
+    pub(crate) stream: String,
+    pub(crate) key: String,
+    pub(crate) as_of: f64,
+    pub(crate) process_id: String,
+    pub(crate) build_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

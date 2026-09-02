@@ -11,6 +11,30 @@ Independent partitions run concurrently across hosts. Hot state remains close to
 
 During movement, the source drains and checkpoints the partition before a higher ownership generation activates on the target. Ingestion continues through the managed endpoint and follows the new owner automatically. A delayed source cannot commit after the generation changes.
 
+Application workers can poll selected partitions:
+
+```bash
+highwater-worker app \
+  --process-only \
+  --process-partitions 1,3,5,7
+```
+
+Each Process partition belongs to one execution instance. Durable ownership generations fence completions from an earlier assignment.
+
+## Calculate a replica target
+
+`highwater-autoscaler` samples admitted work, completed work, and pending backlog. It returns a bounded replica target and a balanced partition assignment as JSON:
+
+```bash
+highwater-autoscaler \
+  --process shopping-assistant \
+  --target "$HIGHWATER_ADDRESS" \
+  --current-replicas 4 \
+  --partitions 64
+```
+
+The command supplies a decision to Highwater Cloud, Kubernetes, or another scheduler. The scheduler creates the requested workers and passes each worker its assigned partitions. Scale-down waits for the configured stabilization period and removes one replica at a time. Replica targets never exceed the number of executable partitions.
+
 ## Backpressure
 
 Capacity is communicated from execution through partition admission to producers. Highwater delays or rejects admission before a hidden queue grows without bound. SDKs retry with jitter; scheduled deployments retain already accepted input while compute is inactive.

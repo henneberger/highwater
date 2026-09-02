@@ -1,58 +1,42 @@
 ---
-title: Streaming operators
-description: Use declarative specifications for common incremental state machines.
+title: Streaming operations
+description: Express stateful stream work in Process handlers.
 ---
 
-Processes remain the primary programming model. Operator specs are useful when an algorithm has a standard incremental implementation and should not cross into Python for every record.
-
-## Filter
+A Process is the public programming model. Start it from a source stream, then write ordinary Python in its event handler.
 
 ```python
-from highwater import FilterSpec
+catalog = streaming.versioned("catalog", key="product_id")
 
-high_temperature = FilterSpec(
-    operator_id="high-temperature",
-    predicate="temperature > 80",
-    handler="HighTemperature",
+@streaming.process(key="user_id")
+@dataclass
+class Recommendation:
+    recent: list[str] = field(default_factory=list)
+
+    @streaming.event
+    async def recommend(self, view, context):
+        product = await catalog.get(
+            view.product_id, as_of=context.event_time
+        )
+        self.recent.append(product.category)
+        return await model.rank(product=product, recent=self.recent)
+
+recommendations = await client.start(
+    Recommendation,
+    source="product-views",
 )
 ```
 
-## Window
+Highwater discovers the versioned dependency from the handler and compiles the execution graph during deployment. The application does not maintain a topology object.
 
-```python
-from highwater import WindowAggregateSpec
+## Event-time lookups
 
-hourly = WindowAggregateSpec(
-    operator_id="hourly-device-temperature",
-    key="device_id",
-    event_time="observed_at",
-    window="1h",
-    aggregate={"count": "*", "max": "temperature"},
-    handler="HourlyDeviceTemperature",
-)
-```
+`await catalog.get(..., as_of=context.event_time)` reads the version that applied when the event occurred. The Process waits for the catalog stream to become complete through that time before it runs.
 
-Windows update incrementally. Finalization follows the input watermark and late-data policy.
+## Stateful decisions
 
-## Temporal join
+Dataclass fields hold keyed state. A handler may update them, emit a result, await application services, and read versioned stream state in one flow.
 
-```python
-from highwater import TemporalJoinSpec
+## Adaptive batches
 
-enriched_clicks = TemporalJoinSpec(
-    operator_id="enriched-clicks",
-    facts="clicks",
-    versions="product_versions",
-    key={"clicks.product_id": "product_versions.product_id"},
-    fact_time="clicked_at",
-    valid_from="effective_at",
-    where="clicks.region == product_versions.region",
-    handler="EnrichedClick",
-)
-```
-
-Each click joins immediately against the newest product version valid at `clicked_at`. The operator does not wait for a full window. Version corrections produce deterministic retractions and replacements when they affect previously emitted facts.
-
-## Interval join
-
-Use `IntervalJoinSpec` when both inputs are event streams and matching is bounded by a time interval. Unlike a temporal join, it retains unmatched events until watermarks pass the interval and lateness boundary.
+Use `@streaming.batch(max_size=..., max_delay=...)` when an operation benefits from vectorized work. Highwater dispatches a batch when its size limit or latency limit is reached.

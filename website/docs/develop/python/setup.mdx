@@ -44,7 +44,7 @@ __all__ = ["Balance", "Recommendations"]
 Run locally with no infrastructure parameters:
 
 ```bash
-highwater server start-dev
+highwater-server --state-dir .highwater/state --object-store-dir .highwater/objects
 highwater-worker app
 ```
 

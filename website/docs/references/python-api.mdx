@@ -9,23 +9,26 @@ description: Public client, Process decorators, handles, and runtime calls.
 from highwater import Client
 
 client = Client()
-orders = client.process("Order")
+orders = await client.get_process_handle("Order")
 ```
 
 | Method | Result |
 | --- | --- |
 | `Client()` | client configured from the local or deployment environment |
-| `client.process(name)` | `ProcessHandle` |
-| `client.close()` | closes client resources |
+| `await client.get_process_handle(name)` | handle for a deployed Process |
+| `await client.deploy_process(definition, input=...)` | deploys a Process over an existing stream |
+| `await client.start(definition)` | creates an input stream and deploys a Process |
+| `await client.compare_builds(process_id, baseline=..., candidate=...)` | compares state and output over retained input |
 
 ## ProcessHandle
 
 | Method | Result |
 | --- | --- |
-| `send(event, *, event_id)` | durable admission receipt |
+| `send(event, *, event_id, event_time=None)` | durable admission receipt |
 | `send_many(events)` | receipts in input order |
 | `state(key)` | latest committed Process state |
-| `output(key, *, after=None)` | asynchronous committed output stream |
+| `drain()` | waits for admitted work to finish |
+| `complete_through(event_time)` | advances a Process-owned event-time boundary |
 
 ## Decorators
 
@@ -37,14 +40,31 @@ orders = client.process("Order")
 | `@streaming.migrate(from_version=N)` | migrates durable state |
 | `@streaming.task` | defines retryable side-effecting work outside Process state transitions |
 
-## Runtime
+## Versioned reference streams
 
-| Call | Purpose |
-| --- | --- |
-| `streaming.key()` | current Process key |
-| `streaming.event_id()` | stable input identity |
-| `streaming.emit(event)` | emits transactional output |
-| `streaming.send(target, event)` | sends transactionally to another Process |
-| `streaming.wait_until(condition)` | suspends on a durable timer or event-time gate |
+```python
+catalog = streaming.versioned("catalog", key="product_id")
 
-Runtime calls are valid only inside a Process handler.
+product = await catalog.get(
+    view.product_id,
+    as_of=context.event_time,
+)
+```
+
+The Process deployment records the reference-stream dependency. An event becomes eligible after the reference stream's completeness frontier reaches the requested event time. The lookup returns the latest non-deleted value at or before `as_of`.
+
+Versioned lookups are valid only inside a Process handler.
+
+## Autoscaling
+
+```python
+from highwater import AutoscalingPolicy, WorkloadSample, recommend_replicas
+```
+
+`recommend_replicas(previous, current, current_replicas=..., partitions=...)` returns a `ScalingDecision`. The decision contains incoming and completed rates, the desired replica count, a reason, and one partition tuple for each active worker.
+
+`assign_partitions(partitions, replicas)` assigns every executable partition once and keeps worker counts balanced.
+
+## Replay comparison
+
+`compare_process_builds(baseline, candidate, records, versioned_histories=...)` runs an offline comparison over `StreamRecord` values. `ReplayComparison.matches` is true when both builds produce identical state and output after every event. `ReplayComparison.differences` contains exact per-event changes.

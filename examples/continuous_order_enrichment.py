@@ -8,12 +8,12 @@ from dataclasses import asdict
 
 from highwater import (
     Client,
-    ProcessSpec,
+    ProcessOptions,
     StreamOptions,
-    TemporalJoinSpec,
     TemporalJoinType,
     WatermarkMode,
 )
+from highwater.dag import Dag
 
 from examples.durable_order_pipeline import FulfillReadyOrder, OrderEvent, OrderIntake
 
@@ -27,42 +27,33 @@ SOURCE_ID = "continuous-order-source-v1"
 EVENT_TIME_EPOCH = 1_788_231_000.0
 
 
-async def ensure_stream(client: Client, name: str) -> None:
-    try:
-        current = await client.stream_info(name)
-    except RuntimeError as error:
-        if "not found" not in str(error):
-            raise
-        await client.create_stream(
-            name,
-            options=StreamOptions(watermark_mode=WatermarkMode.SOURCE_MANAGED),
+def topology() -> Dag:
+    options = StreamOptions(watermark_mode=WatermarkMode.SOURCE_MANAGED)
+    return (
+        Dag("continuous-order-enrichment")
+        .stream(ORDER_EVENTS, options)
+        .stream(READY_ORDERS, options)
+        .stream(CUSTOMER_PROFILES, options)
+        .process(
+            OrderIntake,
+            input=ORDER_EVENTS,
+            process_id=ORDER_INTAKE,
+            options=ProcessOptions(key="customer_id", task_queue="orders"),
+            output=READY_ORDERS,
         )
-        return
-    if current.config["watermark_mode"] != WatermarkMode.SOURCE_MANAGED:
-        raise RuntimeError(f"stream {name} has an incompatible watermark mode")
+        .temporal_join(
+            ORDER_ENRICHMENT,
+            probe=READY_ORDERS,
+            versions=CUSTOMER_PROFILES,
+            workflow=FulfillReadyOrder,
+            task_queue="orders",
+            join_type=TemporalJoinType.LEFT,
+        )
+    )
 
 
 async def deploy(client: Client) -> None:
-    for stream in (ORDER_EVENTS, READY_ORDERS, CUSTOMER_PROFILES):
-        await ensure_stream(client, stream)
-    await client.deploy(ProcessSpec(
-        process_id=ORDER_INTAKE,
-        input=ORDER_EVENTS,
-        workflow=OrderIntake,
-        build_id="order-intake-v2",
-        key="customer_id",
-        event_time="occurred_at",
-        task_queue="orders",
-    ))
-    await client.connect_operator(ORDER_INTAKE, READY_ORDERS)
-    await client.deploy(TemporalJoinSpec(
-        operator_id=ORDER_ENRICHMENT,
-        probe_stream=READY_ORDERS,
-        version_stream=CUSTOMER_PROFILES,
-        workflow=FulfillReadyOrder,
-        task_queue="orders",
-        join_type=TemporalJoinType.LEFT,
-    ))
+    await topology().deploy(client)
 
 
 def event_for_offset(offset: int, interval: float) -> tuple[OrderEvent, dict, str, float]:

@@ -48,6 +48,7 @@ const sidebars = {
         'production/recovery',
         'production/performance',
         'production/scaling',
+        'production/sandboxing',
       ],
     },
     {
@@ -72,7 +73,6 @@ const sidebars = {
       items: [
         'references/python-api',
         'references/options',
-        'references/operator-specs',
         'references/server-options',
         'references/guarantees',
       ],

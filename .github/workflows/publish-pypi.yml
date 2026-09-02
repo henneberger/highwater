@@ -10,24 +10,80 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            artifact: linux-x86_64
+          - runner: macos-14
+            artifact: macos-arm64
+          - runner: macos-15-intel
+            artifact: macos-x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build package
+      - name: Configure native build
+        shell: bash
         run: |
-          python -m pip install --upgrade build
-          python -m build
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            clang_lib="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib"
+            test -f "$clang_lib/libclang.dylib"
+            echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
+          else
+            clang_lib="$(llvm-config --libdir)"
+            compgen -G "$clang_lib/libclang.so*" > /dev/null
+          fi
+          echo "LIBCLANG_PATH=$clang_lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$clang_lib" >> "$GITHUB_ENV"
+      - name: Build engine and wheel
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            expected_version="${GITHUB_REF_NAME#v}"
+            python -c 'import sys, tomllib; actual=tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]; assert actual == sys.argv[1], f"tag {sys.argv[1]} does not match package {actual}"' "$expected_version"
+          fi
+          python -m pip install --upgrade build twine
+          cargo build --release --locked --package highwater-server
+          mkdir -p src/highwater/bin
+          cp target/release/highwater-server src/highwater/bin/highwater-server
+          chmod +x src/highwater/bin/highwater-server
+          python -m build --wheel
+          python -m twine check dist/*.whl
       - name: Verify public import
+        shell: bash
         run: |
           python -m pip install dist/*.whl
-          python -c "import highwater"
+          python -c "import highwater; from highwater.server import binary_path; assert binary_path().is_file(); assert not hasattr(highwater, 'Dag')"
+          python -c "import zipfile, glob; names=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); assert any(name.endswith('/bin/highwater-server') for name in names)"
+          highwater-autoscaler --help > /dev/null
+          smoke_dir="$(mktemp -d)"
+          highwater-server --listen 127.0.0.1:17233 --state-dir "$smoke_dir/state" --object-store-dir "$smoke_dir/objects" > "$smoke_dir/server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..100}; do
+            curl --fail --silent http://127.0.0.1:17233/health > /dev/null && break
+            kill -0 "$server_pid"
+            sleep 0.1
+          done
+          curl --fail --silent http://127.0.0.1:17233/health | python -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
+          kill "$server_pid"
+          wait "$server_pid" || true
+          trap - EXIT
+      - name: Verify durable throughput floor
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
+            --events 100000 --runs 1 --partitions 10 \
+            --execution-instances 10 --handler batch \
+            --minimum-throughput 50000
       - uses: actions/upload-artifact@v4
         with:
-          name: python-package
-          path: dist/
+          name: python-package-${{ matrix.artifact }}
+          path: dist/*.whl
           if-no-files-found: error
 
   publish:
@@ -41,6 +97,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: python-package
+          pattern: python-package-*
           path: dist/
+          merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1

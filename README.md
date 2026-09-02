@@ -30,15 +30,14 @@ No topology builder. No separate state database. No recovery code in your applic
 
 ```bash
 pip install highwater
-brew tap henneberger/highwater
-brew trust --formula henneberger/highwater/highwater
-brew install highwater
 ```
+
+The platform wheel includes the native streaming engine and the Python SDK.
 
 ## Run locally
 
 ```bash
-highwater server start-dev
+highwater-server --state-dir .highwater/state --object-store-dir .highwater/objects
 ```
 
 In another terminal, register the application code with the local execution service:
@@ -47,7 +46,7 @@ In another terminal, register the application code with the local execution serv
 highwater-worker app
 ```
 
-`highwater server start-dev` starts the durable service with local storage. The worker discovers the Processes and workflows in `app.py`.
+`highwater-server` starts the durable service with local storage. The worker discovers the Processes and workflows in `app.py`.
 
 The same CLI executes against Highwater Cloud:
 
@@ -64,7 +63,7 @@ Send an event from Python:
 from highwater import Client
 
 client = Client()
-balances = client.process("Balance")
+balances = await client.get_process_handle("Balance")
 await balances.send(
     Deposit("account-a", 5),
     event_id="deposit-1001",
@@ -145,6 +144,27 @@ class DailyBalance:
 
 Highwater also provides native incremental filters, windows, deduplication, interval joins, and temporal as-of joins. Use them for common state machines and keep application-specific decisions in Python.
 
+Versioned reference streams can be read directly from Process code. Highwater waits until the reference stream is complete through the event timestamp, then resolves the latest version at or before that time.
+
+```python
+from dataclasses import dataclass, field
+
+catalog = streaming.versioned("catalog", key="product_id")
+
+@streaming.process(key="user_id")
+@dataclass
+class ShoppingAssistant:
+    recent: list[str] = field(default_factory=list)
+
+    @streaming.event
+    async def recommend(self, view, context):
+        product = await catalog.get(
+            view.product_id, as_of=context.event_time)
+        self.recent.append(product.category)
+        return await recommendation_model.rank(
+            product=product, recent=self.recent)
+```
+
 ## Event ingestion
 
 Every deployment receives managed HTTPS and SDK ingestion. Highwater assigns durable source positions, validates idempotency keys, partitions by Process key, and applies admission backpressure.
@@ -168,6 +188,45 @@ Cross-partition messages carry causal commit dependencies. A receiver can begin 
 Leases control where an invocation may run. A lease token is a renewable capability tied to a durable partition generation. Expiration only makes a lease eligible for revocation; a durable generation change fences the old executor. Late completions from a prior generation cannot commit.
 
 These choices follow the partitioned, pipelined execution model described by Microsoft Research's [Netherite](https://www.microsoft.com/en-us/research/publication/netherite-efficient-execution-of-serverless-workflows/) and the workload-aware warm execution findings from [Serverless in the Wild](https://www.microsoft.com/en-us/research/publication/serverless-in-the-wild-characterizing-and-optimizing-the-serverless-workload-at-a-large-cloud-provider/).
+
+## Elastic execution
+
+Application workers can own disjoint Process partitions. A scale-out changes the assignment while durable owner epochs fence stale completions. Keys continue from committed state when their partition moves.
+
+`highwater-autoscaler` samples admitted work, completed work, and backlog, then prints a bounded replica decision with balanced partition assignments:
+
+```bash
+highwater-autoscaler \
+  --process shopping-assistant \
+  --target "$HIGHWATER_ADDRESS" \
+  --current-replicas 4 \
+  --partitions 64
+```
+
+The command produces a controller input. Kubernetes, Highwater Cloud, or another scheduler applies the replica count and starts workers with the returned partition assignment.
+
+## Compare an application build
+
+Retained Process input can be replayed through two decorated Process classes before activation. The comparison reports every state or output difference and writes neither result to the running deployment.
+
+```python
+comparison = await client.compare_builds(
+    "shopping-assistant",
+    baseline=ShoppingAssistantV1,
+    candidate=ShoppingAssistantV2,
+)
+
+for difference in comparison.differences:
+    print(difference.event_id, difference.baseline_output, difference.candidate_output)
+```
+
+Versioned stream reads resolve from retained history at the original event time. Application code runs during comparison, so calls to external systems should use recorded responses or an evaluation implementation.
+
+## Hosted and sandboxed workers
+
+The public API and private execution API can listen on separate network interfaces. Execution tokens are scoped to a task queue and an allowlist of build IDs. A worker cannot use its execution identity to reach the public data API.
+
+[`deploy/sandbox/worker.yaml`](deploy/sandbox/worker.yaml) provides the reference Kubernetes boundary. It uses gVisor, a non-root user, a read-only root filesystem, no Linux capabilities, a seccomp profile, bounded processes and compute, disabled service-account credentials, and default-deny ingress and egress. Grant outbound destinations through an explicit network policy.
 
 ## Delivery guarantees
 
@@ -221,7 +280,7 @@ landing/              product landing page
 
 ## Build the implementation
 
-Contributors working on the engine can build and test from source. End users install `highwater` and use `highwater server start-dev`; these commands are not part of the customer setup path.
+Contributors working on the engine can build and test from source. End users install the platform wheel and run `highwater-server`.
 
 ```bash
 cargo test --workspace

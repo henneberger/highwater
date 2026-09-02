@@ -3,168 +3,123 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import uuid
+from dataclasses import dataclass
 
-from highwater import (
-    ChangeKind,
-    Client,
-    StreamOptions,
-    TemporalJoinSpec,
-    TemporalJoinType,
-    workflow,
-)
+from highwater import ChangeKind, Client, Registry, StreamOptions, streaming
+from highwater.rust_worker import RustWorker
 
 
-@workflow.defn
-class TemporalJoinWorkflow:
-    @workflow.run
-    async def run(self, joined: dict) -> dict:
-        purchase = joined["probe"]["value"]
-        version_record = joined["version"]
-        if version_record is None:
+accounts = streaming.versioned("account-versions", key="account_id")
+
+
+@streaming.process(key="account_id")
+@dataclass
+class PurchaseCheck:
+    checked: int = 0
+
+    @streaming.event
+    async def check(self, purchase, context):
+        account = await accounts.get(
+            purchase.account_id, as_of=context.event_time
+        )
+        self.checked += 1
+        if account is None:
             return {
-                "purchase_id": purchase["purchase_id"],
+                "purchase_id": purchase.purchase_id,
                 "matched": False,
                 "reason": "no account version existed at purchase time",
             }
 
-        account = version_record["value"]
         conditions = {
-            "country_matches": account["country"] == purchase["country"],
-            "account_active": account["active"],
-            "minimum_amount": purchase["amount"] >= 100,
+            "country_matches": account.country == purchase.country,
+            "account_active": account.active,
+            "minimum_amount": purchase.amount >= 100,
         }
         return {
-            "purchase_id": purchase["purchase_id"],
-            "account_version": account["version"],
-            "account_version_time": version_record["event_time"],
-            "purchase_time": joined["as_of"],
+            "purchase_id": purchase.purchase_id,
+            "account_version": account.version,
+            "purchase_time": context.event_time,
             "conditions": conditions,
             "matched": all(conditions.values()),
         }
 
 
-async def publish(
-    client: Client,
-    stream: str,
-    event_id: str,
-    key: str,
-    value: dict | None,
-    event_time: float,
-    *,
-    kind: ChangeKind = ChangeKind.UPSERT,
-) -> None:
-    await client.publish_event(
-        stream,
-        value,
-        event_time=event_time,
-        key=key,
-        kind=kind,
-        event_id=event_id,
-    )
+async def ensure_stream(client: Client, name: str) -> None:
+    try:
+        await client.create_stream(
+            name,
+            options=StreamOptions(max_out_of_orderness=100, allowed_lateness=1),
+        )
+    except RuntimeError as error:
+        if "already exists" not in str(error):
+            raise
 
 
 async def main(target: str) -> None:
     client = Client(target)
-    suffix = uuid.uuid4().hex[:8]
-    purchases = f"purchases-{suffix}"
-    accounts = f"account-versions-{suffix}"
-    join_id = f"purchase-accounts-{suffix}"
-    stream_options = StreamOptions(
-        max_out_of_orderness=100,
-        allowed_lateness=1,
-    )
-    await client.create_stream(purchases, options=stream_options)
-    await client.create_stream(accounts, options=stream_options)
-    join = TemporalJoinSpec(
-        operator_id=join_id,
-        probe_stream=purchases,
-        version_stream=accounts,
-        workflow=TemporalJoinWorkflow,
-        join_type=TemporalJoinType.LEFT,
-    )
-    await client.deploy(join)
-    await client.deploy(join)
-
-    await publish(client, accounts, "account-a-v1", "a", {
-        "version": "a-v1",
-        "country": "US",
-        "active": True,
-    }, 5)
-    await publish(client, accounts, "account-b-v1", "b", {
-        "version": "b-v1",
-        "country": "GB",
-        "active": True,
-    }, 9)
-    await publish(client, accounts, "account-a-v2", "a", {
-        "version": "a-v2",
-        "country": "CA",
-        "active": False,
-    }, 12)
-    await publish(
-        client,
-        accounts,
-        "account-c-deleted",
-        "c",
-        None,
-        11,
-        kind=ChangeKind.DELETE,
+    await ensure_stream(client, "purchases")
+    await ensure_stream(client, "account-versions")
+    checks = await client.start(
+        PurchaseCheck,
+        source="purchases",
+        process_id="purchase-checks",
     )
 
-    probe_rows = [
-        ("purchase-before-update", "a", "US", 150, 10),
-        ("purchase-no-fallback", "a", "US", 150, 14),
-        ("purchase-b", "b", "GB", 110, 13),
-        ("purchase-low", "b", "GB", 80, 14),
-        ("purchase-deleted", "c", "US", 120, 13),
-        ("purchase-cross-boundary", "b", "GB", 125, 31),
-    ]
-    for purchase_id, account_id, country, amount, event_time in probe_rows:
-        await publish(client, purchases, purchase_id, account_id, {
-            "purchase_id": purchase_id,
-            "country": country,
-            "amount": amount,
-        }, event_time)
+    registry = Registry()
+    registry.register_workflow(PurchaseCheck)
+    worker = RustWorker(registry, target=target)
+    worker_task = asyncio.create_task(worker.run_forever())
+    try:
+        for event_id, account_id, value, event_time, kind in (
+            ("account-a-v1", "a", {"version": "a-v1", "country": "US", "active": True}, 5, ChangeKind.UPSERT),
+            ("account-b-v1", "b", {"version": "b-v1", "country": "GB", "active": True}, 9, ChangeKind.UPSERT),
+            ("account-a-v2", "a", {"version": "a-v2", "country": "CA", "active": False}, 12, ChangeKind.UPSERT),
+            ("account-c-deleted", "c", None, 11, ChangeKind.DELETE),
+        ):
+            await client.publish_event(
+                "account-versions",
+                value,
+                key=account_id,
+                event_time=event_time,
+                event_id=event_id,
+                kind=kind,
+            )
 
-    await client.advance_watermark(accounts, 0, 11)
-    await client.advance_watermark(purchases, 0, 11)
-    first = client.get_workflow_handle(
-        f"temporal-join/{join_id}/{purchases}/0000000000/00000000000000000000",
-    )
-    first_result = await first.result(timeout=10)
-
-    await client.advance_watermark(accounts, 0, 32)
-    await client.advance_watermark(purchases, 0, 32)
-    outputs = await client.read_temporal_join(join_id)
-    results = [first_result]
-    for output in outputs:
-        if output.workflow_id == first.id or output.workflow_id is None:
-            continue
-        results.append(
-            await client.get_workflow_handle(output.workflow_id).result(timeout=10),
+        purchases = (
+            ("purchase-before-update", "a", "US", 150, 10),
+            ("purchase-after-update", "a", "US", 150, 14),
+            ("purchase-b", "b", "GB", 110, 13),
+            ("purchase-low", "b", "GB", 80, 14),
+            ("purchase-deleted", "c", "US", 120, 13),
         )
+        for purchase_id, account_id, country, amount, event_time in purchases:
+            await client.publish_event(
+                "purchases",
+                {
+                    "purchase_id": purchase_id,
+                    "account_id": account_id,
+                    "country": country,
+                    "amount": amount,
+                },
+                key=account_id,
+                event_time=event_time,
+                event_id=purchase_id,
+            )
 
-    first_probe = probe_rows[0]
-    duplicate = await client.publish_event(
-        purchases,
-        {
-            "purchase_id": first_probe[0],
-            "country": first_probe[2],
-            "amount": first_probe[3],
-        },
-        event_time=first_probe[4],
-        key=first_probe[1],
-        event_id=first_probe[0],
-    )
-    await client.seal_partition(accounts, 0)
-    await client.seal_partition(purchases, 0)
-
-    print(json.dumps({
-        "first_result_at_watermark_11": first_result,
-        "all_results": sorted(results, key=lambda result: result["purchase_id"]),
-        "duplicate_disposition": duplicate["disposition"],
-        "join": await client.temporal_join(join_id),
-    }, indent=2, sort_keys=True))
+        await client.advance_watermark("account-versions", 0, 20)
+        await checks.drain(timeout=10)
+        changes = await client.read_operator_changes("purchase-checks")
+        print(json.dumps(
+            sorted(
+                (change["row"] for change in changes if change["diff"] > 0),
+                key=lambda row: row["purchase_id"],
+            ),
+            indent=2,
+            sort_keys=True,
+        ))
+    finally:
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
 
 
 if __name__ == "__main__":

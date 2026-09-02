@@ -34,15 +34,24 @@ Highwater guarantees one committed transition at a time for each `account_id`. D
 
 Process state changes become visible only when the invocation commits. Code may run more than once after a timeout or host failure, so direct external effects must use a stable idempotency key. Prefer returning output from the handler; Highwater publishes committed output with a stable message identifier.
 
-## Timers and gates
+## Event-time gates
 
-Use durable timers for processing-time delays. Use event-time gates when correctness depends on source progress:
+Use a completeness gate when a transition depends on source progress:
 
 ```python
-await streaming.wait_until(streaming.event_time >= close_at)
+@streaming.process(
+    key="account_id",
+    event_time="occurred_at",
+    wait_until=streaming.complete,
+)
+@dataclass
+class Account:
+    @streaming.event
+    async def apply(self, event):
+        return {"account_id": event.account_id, "complete": True}
 ```
 
-The Process suspends without holding execution capacity. Its state and wait condition remain durable.
+An event remains in the durable Process inbox until the source watermark reaches its event timestamp. Waiting events do not hold worker capacity.
 
 ## Hot keys
 

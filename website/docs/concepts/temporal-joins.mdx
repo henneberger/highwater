@@ -13,6 +13,19 @@ click:                            10:30
 result:                           price = $10
 ```
 
+Application code can express the same lookup directly:
+
+```python
+prices = streaming.versioned("product-prices", key="product_id")
+
+price = await prices.get(
+    order.product_id,
+    as_of=context.event_time,
+)
+```
+
+Highwater discovers the reference dependency when it registers the Process. The event waits until the price stream is complete through its event time. Lookup work uses the per-key version index rather than scanning the stream.
+
 This differs from a stream-to-stream interval join:
 
 | Temporal join | Interval join |

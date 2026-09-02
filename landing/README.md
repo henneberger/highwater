@@ -13,7 +13,7 @@ Open `http://localhost:8080`.
 
 ## Configure links
 
-Replace the placeholders in `config.js` before publishing:
+Review the destinations in `config.js` before publishing:
 
 - documentation;
 - early-access contact or form;

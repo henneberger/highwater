@@ -7,10 +7,9 @@ description: Install Highwater, run a local streaming application, and publish e
 
 ```bash
 pip install highwater
-brew tap henneberger/highwater
-brew trust --formula henneberger/highwater/highwater
-brew install highwater
 ```
+
+The platform wheel contains the native streaming engine and Python SDK.
 
 Create `app.py`:
 
@@ -37,7 +36,7 @@ class Balance:
 ## Start locally
 
 ```bash
-highwater server start-dev
+highwater-server --state-dir .highwater/state --object-store-dir .highwater/objects
 ```
 
 In another terminal:
@@ -55,7 +54,7 @@ from highwater import Client
 from app import Deposit
 
 client = Client()
-balances = client.process("Balance")
+balances = await client.get_process_handle("Balance")
 
 await balances.send(
     Deposit(account_id="account-a", amount=5),

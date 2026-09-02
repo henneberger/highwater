@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=70.1", "wheel>=0.43"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "highwater"
-version = "0.0.2"
+version = "0.0.3"
 description = "Durable execution for streaming applications"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -18,9 +18,14 @@ Repository = "https://github.com/henneberger/highwater"
 
 [project.scripts]
 highwater-worker = "highwater.rust_worker:main"
+highwater-server = "highwater.server:main"
+highwater-autoscaler = "highwater.autoscaler_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+highwater = ["bin/highwater-server", "bin/highwater-server.exe"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

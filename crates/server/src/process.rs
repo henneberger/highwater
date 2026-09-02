@@ -36,6 +36,19 @@ pub(crate) fn process_item_is_eligible(
     process: &DurableProcess,
     item: &ProcessMailboxItem,
 ) -> Result<bool> {
+    for stream in &process.versioned_streams {
+        let config = transaction
+            .get::<StreamConfig>(&stream_config_key(stream))?
+            .ok_or_else(|| anyhow!("versioned stream missing: {stream}"))?;
+        let state = transaction
+            .get::<StreamState>(&stream_state_key(stream))?
+            .ok_or_else(|| anyhow!("versioned stream state missing: {stream}"))?;
+        if !completeness_frontier(&config, &state)
+            .is_some_and(|frontier| frontier >= item.event_time)
+        {
+            return Ok(false);
+        }
+    }
     if process.event_time_gate == EventTimeGate::Immediate {
         return Ok(true);
     }
@@ -568,6 +581,16 @@ pub(crate) async fn create_process(
         || request.batch_max_size > 16_384
         || !request.batch_max_delay.is_finite()
         || request.batch_max_delay < 0.0
+        || request
+            .versioned_streams
+            .iter()
+            .any(|stream| stream.trim().is_empty())
+        || request
+            .versioned_streams
+            .iter()
+            .collect::<HashSet<_>>()
+            .len()
+            != request.versioned_streams.len()
     {
         return Err(ApiError(anyhow!(
             "process state version, concurrency, retry policy, capacity, and batch settings are invalid"
@@ -581,6 +604,7 @@ pub(crate) async fn create_process(
         event_time_field: request.event_time_field,
         state_version: request.state_version,
         active_build_id: request.build_id,
+        versioned_streams: request.versioned_streams,
         task_queue: request.task_queue,
         event_time_gate: request.event_time_gate,
         max_concurrent_keys: request.max_concurrent_keys,
@@ -607,6 +631,25 @@ pub(crate) async fn create_process(
             .is_none()
         {
             bail!("process input stream not found: {}", process.stream);
+        }
+        for stream in &process.versioned_streams {
+            if transaction
+                .get::<StreamConfig>(&stream_config_key(stream))?
+                .is_none()
+            {
+                bail!("versioned stream not found: {stream}");
+            }
+            let ready_key = versioned_index_ready_key(stream);
+            if transaction.get::<bool>(&ready_key)?.is_none() {
+                for (_, record) in
+                    transaction.scan::<StreamRecord>(&stream_record_prefix(stream))?
+                {
+                    if record.key.as_deref().is_some_and(|key| !key.is_empty()) {
+                        transaction.put(versioned_record_key(stream, &record), &record)?;
+                    }
+                }
+                transaction.put(ready_key, &true)?;
+            }
         }
         let storage_key = process_key(&process.process_id);
         if let Some(mut existing) = transaction.get::<DurableProcess>(&storage_key)? {
@@ -635,8 +678,23 @@ pub(crate) async fn create_process(
                         process.state_version,
                     );
                 }
+                if let Some(edge) =
+                    transaction.get::<OperatorEdge>(&operator_edge_key(&process.process_id))?
+                {
+                    let mut inputs = vec![process.stream.clone()];
+                    inputs.extend(process.versioned_streams.iter().cloned());
+                    if stream_reaches_any(
+                        transaction,
+                        &edge.output_stream,
+                        &inputs,
+                        &mut HashSet::new(),
+                    )? {
+                        bail!("process reference update would create an operator edge cycle");
+                    }
+                }
                 existing.state_version = process.state_version;
                 existing.active_build_id = process.active_build_id.clone();
+                existing.versioned_streams = process.versioned_streams.clone();
                 existing.task_queue = process.task_queue.clone();
                 existing.max_concurrent_keys = process.max_concurrent_keys;
                 existing.mailbox_capacity = process.mailbox_capacity;
@@ -722,7 +780,8 @@ pub(crate) fn append_process_shard_records(
     let process = transaction
         .get::<DurableProcess>(&process_key(process_id))?
         .ok_or_else(|| anyhow!("process not found: {process_id}"))?;
-    if process.event_time_gate != EventTimeGate::Immediate {
+    if process.event_time_gate != EventTimeGate::Immediate || !process.versioned_streams.is_empty()
+    {
         bail!("event-time-gated processes must publish through their input stream");
     }
     let state_key = process_shard_state_key(process_id, shard);

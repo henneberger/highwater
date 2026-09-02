@@ -1,0 +1,10 @@
+dag event-time-windows
+
+streams
+  measurements [partitions=2 max_out_of_orderness=2 idle_timeout=30 allowed_lateness=1 alignment_max_drift=20]
+
+operators
+  window-sum [window aggregate] workflow=WindowSumWorkflow aggregation=sum size=10s slide=10s start=0
+
+edges
+  measurements -> window-sum [keyed event-time records]

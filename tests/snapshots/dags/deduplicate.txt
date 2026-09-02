@@ -1,0 +1,10 @@
+dag deduplicate
+
+streams
+  commands [allowed_lateness=1]
+
+operators
+  first-command [deduplicate] workflow=DeduplicateWorkflow keep=first_by_event_time
+
+edges
+  commands -> first-command [keyed event-time records]

@@ -4,8 +4,11 @@ import hashlib
 import inspect
 import math
 import marshal
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, fields, is_dataclass
-from typing import Any, Generic, TypeVar, get_args, get_origin, get_type_hints, overload
+from datetime import datetime
+from typing import Any, Callable, Generic, TypeVar, get_args, get_origin, get_type_hints, overload
 
 from .model import EventTimeGate
 
@@ -13,18 +16,104 @@ S = TypeVar("S")
 O = TypeVar("O")
 T = TypeVar("T", bound=type)
 
+_VersionedResolver = Callable[[str, str, float], Any]
+_versioned_resolver: ContextVar[_VersionedResolver | None] = ContextVar(
+    "highwater_versioned_resolver",
+    default=None,
+)
+
+
+class RecordValue(dict[str, Any]):
+    """A JSON object that supports both mapping and attribute access."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as error:
+            raise AttributeError(name) from error
+
+
+def _record_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return RecordValue({key: _record_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return [_record_value(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class Versioned(Generic[O]):
+    stream: str
+    key: str
+
+    def __post_init__(self) -> None:
+        if not self.stream.strip() or not self.key.strip():
+            raise ValueError("versioned stream and key must not be empty")
+
+    async def get(self, key: Any, *, as_of: float | datetime) -> O | None:
+        selected_key = str(key)
+        if not selected_key:
+            raise ValueError("versioned lookup key must not be empty")
+        if isinstance(as_of, datetime):
+            if as_of.tzinfo is None:
+                raise ValueError("versioned lookup datetimes must include a timezone")
+            selected_as_of = as_of.timestamp()
+        else:
+            selected_as_of = float(as_of)
+        if not math.isfinite(selected_as_of):
+            raise ValueError("versioned lookup time must be finite")
+        resolver = _versioned_resolver.get()
+        if resolver is None:
+            raise RuntimeError("versioned lookups are only available inside a Highwater Process")
+        return _record_value(resolver(self.stream, selected_key, selected_as_of))
+
+
+@contextmanager
+def _versioned_runtime(resolver: _VersionedResolver):
+    token = _versioned_resolver.set(resolver)
+    try:
+        yield
+    finally:
+        _versioned_resolver.reset(token)
+
 
 def _json_value(value: Any) -> Any:
     return asdict(value) if is_dataclass(value) else value
 
 
-def _build_id(target: type, state_version: int, methods: list[Any]) -> str:
+def _build_id(
+    target: type,
+    state_version: int,
+    methods: list[Any],
+    versioned: tuple[Versioned[Any], ...] = (),
+) -> str:
     digest = hashlib.sha256()
     digest.update(f"{target.__module__}.{target.__qualname__}:{state_version}".encode())
     for method in methods:
         digest.update(method.__name__.encode())
         digest.update(marshal.dumps(method.__code__))
+    for lookup in versioned:
+        digest.update(f"versioned:{lookup.stream}:{lookup.key}".encode())
     return digest.hexdigest()
+
+
+def _referenced_versioned(handler: Any) -> tuple[Versioned[Any], ...]:
+    values: list[Any] = [
+        handler.__globals__.get(name)
+        for name in handler.__code__.co_names
+    ]
+    if handler.__closure__ is not None:
+        for cell in handler.__closure__:
+            try:
+                values.append(cell.cell_contents)
+            except ValueError:
+                pass
+    lookups = {
+        (value.stream, value.key): value
+        for value in values
+        if isinstance(value, Versioned)
+    }
+    return tuple(lookups[key] for key in sorted(lookups))
 
 
 @dataclass(frozen=True)
@@ -126,10 +215,24 @@ class _StreamingAnnotations:
                 raise TypeError("process migration versions must be unique")
             if any(version <= 0 or version >= state_version for version in migrations):
                 raise ValueError("process migrations must start below the current state version")
+            versioned_by_identity = {
+                (lookup.stream, lookup.key): lookup
+                for lookup in _referenced_versioned(handler)
+            }
+            versioned_by_identity.update({
+                (value.stream, value.key): value
+                for value in vars(target).values()
+                if isinstance(value, Versioned)
+            })
+            versioned = tuple(
+                versioned_by_identity[key]
+                for key in sorted(versioned_by_identity)
+            )
             selected_build_id = build_id or _build_id(
                 target,
                 state_version,
                 [handler] + [member for _, _, member in sorted(migration_methods)],
+                versioned,
             )
 
             async def prepare(
@@ -173,6 +276,8 @@ class _StreamingAnnotations:
                 event = envelope["record"]["value"]
                 if event_type is not None and is_dataclass(event_type) and isinstance(event, dict):
                     event = event_type(**event)
+                else:
+                    event = _record_value(event)
                 return event, context
 
             async def batch_run(
@@ -244,6 +349,12 @@ class _StreamingAnnotations:
             setattr(target, "__highwater_state_version__", state_version)
             setattr(target, "__highwater_build_id__", selected_build_id)
             setattr(target, "__highwater_migrations_from__", tuple(sorted(migrations)))
+            setattr(target, "__highwater_versioned_streams__", tuple(
+                lookup.stream for lookup in versioned
+            ))
+            setattr(target, "__highwater_versioned_lookups__", tuple(
+                (lookup.stream, lookup.key) for lookup in versioned
+            ))
             setattr(target, "__highwater_batch_max_size__", getattr(handler, "__highwater_batch_max_size__", 64))
             setattr(target, "__highwater_batch_max_delay__", getattr(handler, "__highwater_batch_max_delay__", 0.005))
             return target
@@ -280,6 +391,10 @@ class _StreamingAnnotations:
             return fn
 
         return decorate
+
+    @staticmethod
+    def versioned(stream: str, *, key: str) -> Versioned[Any]:
+        return Versioned(stream=stream, key=key)
 
     @staticmethod
     def transition(state: S, *, emit: O | None = None) -> Transition[S, O]:

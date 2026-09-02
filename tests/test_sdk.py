@@ -10,30 +10,41 @@ import highwater
 from highwater import (
     Client,
     Comparison,
-    DeduplicateSpec,
     Event,
     EventTimeGate,
-    FilterSpec,
-    IntervalJoinSpec,
-    ProcessSpec,
     ProcessContext,
     ProcessOptions,
     Registry,
     NonDeterminismError,
-    TemporalJoinSpec,
     TemporalJoinType,
-    WindowAggregateSpec,
     WindowAggregation,
     execute_activity,
     wait_for_watermark,
     workflow,
     streaming,
 )
+from highwater.model import (
+    DeduplicateSpec,
+    FilterSpec,
+    IntervalJoinSpec,
+    ProcessSpec,
+    TemporalJoinSpec,
+    WindowAggregateSpec,
+)
 from highwater.workflow_runner import WorkflowRunner
 from highwater.rust_worker import RustWorker
 
 
 class SdkTest(unittest.TestCase):
+    def test_example_catalog_discovers_every_registered_definition(self):
+        import examples.catalog as catalog
+
+        registry = Registry().discover(catalog)
+        self.assertIn("PurchaseCheck", registry.workflows)
+        self.assertIn("ShoppingAssistant", registry.workflows)
+        self.assertIn("OrderWorkflow", registry.workflows)
+        self.assertIn("fulfill_order", registry.activities)
+
     def test_client_uses_explicit_or_environment_api_key(self):
         with patch.dict(os.environ, {"HIGHWATER_API_KEY": "environment-key"}):
             self.assertEqual(
@@ -53,6 +64,16 @@ class SdkTest(unittest.TestCase):
         self.assertFalse(hasattr(streaming, "defn"))
         self.assertFalse(hasattr(highwater, "activity"))
         self.assertFalse(hasattr(highwater, "process"))
+        for internal_name in (
+            "Dag",
+            "ProcessSpec",
+            "TemporalJoinSpec",
+            "IntervalJoinSpec",
+            "WindowAggregateSpec",
+            "FilterSpec",
+            "DeduplicateSpec",
+        ):
+            self.assertFalse(hasattr(highwater, internal_name))
 
     def test_stream_writer_resumes_cursor_and_claims_fenced_epoch(self):
         class RecordingClient(Client):
@@ -161,7 +182,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 return {"method": method, "path": path, "body": body}
 
-        response = asyncio.run(RecordingClient().deploy(FilterSpec(
+        response = asyncio.run(RecordingClient()._deploy_operator(FilterSpec(
             operator_id="high-temperature",
             stream="sensors",
             workflow="AlertWorkflow",
@@ -185,7 +206,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 return {"method": method, "path": path, "body": body}
 
-        response = asyncio.run(RecordingClient().deploy(TemporalJoinSpec(
+        response = asyncio.run(RecordingClient()._deploy_operator(TemporalJoinSpec(
             operator_id="orders-with-rates",
             probe_stream="orders",
             version_stream="rates",
@@ -209,7 +230,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 return {"method": method, "path": path, "body": body}
 
-        response = asyncio.run(RecordingClient().deploy(WindowAggregateSpec(
+        response = asyncio.run(RecordingClient()._deploy_operator(WindowAggregateSpec(
             operator_id="ten-second-sums",
             stream="measurements",
             workflow="WindowSumWorkflow",
@@ -237,7 +258,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 return {"method": method, "path": path, "body": body}
 
-        response = asyncio.run(RecordingClient().deploy(IntervalJoinSpec(
+        response = asyncio.run(RecordingClient()._deploy_operator(IntervalJoinSpec(
             operator_id="login-purchases",
             left_stream="logins",
             right_stream="purchases",
@@ -255,7 +276,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 return {"method": method, "path": path, "body": body}
 
-        response = asyncio.run(RecordingClient().deploy(DeduplicateSpec(
+        response = asyncio.run(RecordingClient()._deploy_operator(DeduplicateSpec(
             operator_id="first-command",
             stream="commands",
             workflow="CommandWorkflow",
@@ -285,7 +306,7 @@ class SdkTest(unittest.TestCase):
             async def _request(self, method, path, body=None):
                 return {"method": method, "path": path, "body": body}
 
-        response = asyncio.run(RecordingClient().deploy(ProcessSpec(
+        response = asyncio.run(RecordingClient()._deploy_operator(ProcessSpec(
             process_id="accounts",
             input="account-events",
             workflow="AccountProcessWorkflow",
@@ -305,6 +326,7 @@ class SdkTest(unittest.TestCase):
             "state_version": 1,
             "build_id": "accounts-v1",
             "migrations_from": (),
+            "versioned_streams": (),
             "task_queue": "default",
             "event_time_gate": EventTimeGate.COMPLETE,
             "max_concurrent_keys": 8,
@@ -315,6 +337,57 @@ class SdkTest(unittest.TestCase):
             "batch_max_size": 64,
             "batch_max_delay": 0.005,
         })
+
+    def test_versioned_lookup_is_declared_and_resolved_inside_process(self):
+        from highwater.streaming import _versioned_runtime
+
+        catalog = streaming.versioned("catalog", key="product_id")
+
+        @streaming.process(key="user_id")
+        @dataclass
+        class ShoppingAssistant:
+            category: str | None = None
+
+            @streaming.event
+            async def recommend(self, view, context):
+                product = await catalog.get(
+                    view["product_id"], as_of=context.event_time
+                )
+                self.category = None if product is None else product.category
+                return self.category
+
+        lookups = []
+
+        def resolve(stream, key, as_of):
+            lookups.append((stream, key, as_of))
+            return {"category": "books", "details": {"title": "Stream Processing"}}
+
+        async def execute():
+            with _versioned_runtime(resolve):
+                return await ShoppingAssistant.__highwater_process_run__(
+                    ShoppingAssistant(),
+                    {
+                        "process_id": "shopping",
+                        "key": "user-1",
+                        "event_time": 42.0,
+                        "state": None,
+                        "state_version": None,
+                        "record": {"value": {"product_id": "product-7"}},
+                    },
+                )
+
+        result = asyncio.run(execute())
+
+        self.assertEqual(ShoppingAssistant.__highwater_versioned_streams__, ("catalog",))
+        self.assertEqual(lookups, [("catalog", "product-7", 42.0)])
+        self.assertEqual(result["state"], {"category": "books"})
+        self.assertEqual(result["emit"], "books")
+
+    def test_versioned_lookup_requires_process_runtime(self):
+        catalog = streaming.versioned("catalog", key="product_id")
+
+        with self.assertRaisesRegex(RuntimeError, "only available inside a Highwater Process"):
+            asyncio.run(catalog.get("product-1", as_of=10.0))
 
     def test_typed_process_transitions_state_and_emits_output(self):
         @dataclass(frozen=True)

@@ -1,0 +1,12 @@
+dag shopping-assistant
+
+streams
+  catalog [max_out_of_orderness=0]
+  shopping-assistant-input [inferred]
+
+operators
+  shopping-assistant [process] workflow=ShoppingAssistant state=v1 key=user_id gate=immediate batch=64/0.005s
+
+edges
+  catalog -> shopping-assistant [versioned lookup key=product_id as_of=event_time completeness=required]
+  shopping-assistant-input -> shopping-assistant [events key=user_id]

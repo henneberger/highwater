@@ -18,3 +18,25 @@ highwater workflow describe --id ORDER_ID
 ```
 
 Worker access belongs on a private network. The execution gateway is separate from public ingestion and does not expose storage, checkpoints, or administration.
+
+## Scope worker identity
+
+Set `HIGHWATER_EXECUTION_TOKEN` from a secret mounted into the worker. The service identity maps that token to one task queue and an allowlist of build IDs. A worker cannot poll another deployment or present an unapproved build.
+
+Production deployments use separate listeners:
+
+```bash
+highwater-server \
+  --listen 0.0.0.0:7233 \
+  --execution-listen 0.0.0.0:7234 \
+  --api-token-file /run/secrets/public-api-token \
+  --execution-identity-file /run/secrets/execution-identities.json
+```
+
+Expose the public listener through the application API. Route the execution listener only to application workers.
+
+## Apply the worker sandbox
+
+The repository includes a [reference Kubernetes worker profile](https://github.com/henneberger/highwater/blob/main/deploy/sandbox/worker.yaml). It selects gVisor and runs the application as UID 65532 with a read-only root filesystem. Linux capabilities, privilege escalation, ingress, and service-account credentials are disabled. CPU, memory, process count, and temporary storage are bounded.
+
+The default network policy permits DNS and the private Highwater execution endpoint. Add explicit egress rules for each model or service the application calls.

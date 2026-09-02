@@ -5,7 +5,8 @@ import asyncio
 import json
 import uuid
 
-from highwater import Client, DeduplicateSpec, StreamOptions, workflow
+from highwater import Client, StreamOptions, workflow
+from highwater.dag import Dag
 
 
 @workflow.defn
@@ -19,22 +20,28 @@ class DeduplicateWorkflow:
         }
 
 
+def topology(stream: str, operator_id: str) -> Dag:
+    return (
+        Dag("deduplicate")
+        .stream(stream, StreamOptions(
+            max_out_of_orderness=5,
+            allowed_lateness=1,
+        ))
+        .deduplicate(
+            operator_id,
+            input=stream,
+            workflow=DeduplicateWorkflow,
+        )
+    )
+
+
 async def main(target: str) -> None:
     client = Client(target)
     suffix = uuid.uuid4().hex[:8]
     stream = f"commands-{suffix}"
     operator_id = f"first-command-{suffix}"
-    await client.create_stream(stream, options=StreamOptions(
-        max_out_of_orderness=5,
-        allowed_lateness=1,
-    ))
-    spec = DeduplicateSpec(
-        operator_id=operator_id,
-        stream=stream,
-        workflow=DeduplicateWorkflow,
-    )
-    await client.deploy(spec)
-    await client.deploy(spec)
+    await topology(stream, operator_id).deploy(client)
+    await topology(stream, operator_id).deploy(client)
 
     rows = [
         ("a-arrived-first", "a", 10),

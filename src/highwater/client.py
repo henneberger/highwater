@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .dag import _process_node
 from .errors import StreamBackpressure, WorkflowCancelled, WorkflowFailed
 from .model import (
     ChangeKind,
@@ -34,6 +35,7 @@ from .model import (
     WorkflowOptions,
     WorkflowStatus,
 )
+from .replay import ReplayComparison, compare_process_builds
 
 
 def _timestamp(value: float | datetime) -> float:
@@ -460,6 +462,7 @@ class Client:
                     return json.loads(response.read() or b"null")
             except HTTPError as error:
                 payload = json.loads(error.read() or b"{}")
+                error.close()
                 if error.code == 429:
                     raise StreamBackpressure(payload.get("error", str(error))) from error
                 raise RuntimeError(payload.get("error", str(error))) from error
@@ -479,6 +482,7 @@ class Client:
                     return json.loads(response.read() or b"null")
             except HTTPError as error:
                 payload = json.loads(error.read() or b"{}")
+                error.close()
                 if error.code == 429:
                     raise StreamBackpressure(payload.get("error", str(error))) from error
                 raise RuntimeError(payload.get("error", str(error))) from error
@@ -612,7 +616,7 @@ class Client:
             "GET", f"/stream-schedules/{quote(schedule_id, safe='')}",
         )
 
-    async def deploy(
+    async def _deploy_operator(
         self,
         spec: DeduplicateSpec | FilterSpec | IntervalJoinSpec | ProcessSpec | TemporalJoinSpec | WindowAggregateSpec,
     ) -> dict[str, Any]:
@@ -631,6 +635,7 @@ class Client:
                 "state_version": spec.state_version,
                 "build_id": spec.build_id,
                 "migrations_from": spec.migrations_from,
+                "versioned_streams": spec.versioned_streams,
                 "task_queue": spec.task_queue,
                 "event_time_gate": spec.event_time_gate,
                 "max_concurrent_keys": spec.max_concurrency,
@@ -734,32 +739,11 @@ class Client:
             event_time_gate=getattr(definition, "__highwater_process_gate__"),
         )
         identifier = process_id or name
-        batch_size = selected.batch_size or getattr(
-            definition, "__highwater_batch_max_size__"
-        )
-        batch_delay = (
-            selected.batch_delay
-            if selected.batch_delay is not None
-            else getattr(definition, "__highwater_batch_max_delay__")
-        )
-        await self.deploy(ProcessSpec(
-            process_id=identifier,
+        await self._deploy_operator(_process_node(
+            definition,
             input=input,
-            workflow=definition,
-            build_id=getattr(definition, "__highwater_build_id__"),
-            state_version=getattr(definition, "__highwater_state_version__"),
-            migrations_from=getattr(definition, "__highwater_migrations_from__"),
-            key=selected.key,
-            event_time=getattr(definition, "__highwater_process_event_time__"),
-            event_time_gate=selected.event_time_gate,
-            max_concurrency=selected.max_concurrency,
-            capacity=selected.capacity,
-            retry_concurrency=selected.retry_concurrency,
-            max_attempts=selected.max_attempts,
-            discard_input_on_success=selected.discard_input_on_success,
-            batch_size=batch_size,
-            batch_delay=batch_delay,
-            task_queue=selected.task_queue,
+            process_id=identifier,
+            options=selected,
         ))
         return ProcessHandle(
             self,
@@ -801,6 +785,7 @@ class Client:
         handle.owns_input = owns_input
         handle.direct_ingress = (
             owns_input
+            and not getattr(definition, "__highwater_versioned_streams__", ())
             and (options or ProcessOptions(
                 key=getattr(definition, "__highwater_process_key__"),
                 event_time_gate=getattr(definition, "__highwater_process_gate__"),
@@ -816,7 +801,10 @@ class Client:
             current["stream"],
             current.get("key_field"),
             current.get("event_time_field"),
-            direct_ingress=current.get("event_time_gate") == EventTimeGate.IMMEDIATE,
+            direct_ingress=(
+                current.get("event_time_gate") == EventTimeGate.IMMEDIATE
+                and not current.get("versioned_streams")
+            ),
         )
 
     async def temporal_join(self, join_id: str) -> dict[str, Any]:
@@ -840,6 +828,34 @@ class Client:
             f"/processes/{quote(process_id, safe='')}/keys/{quote(key, safe='')}",
         )
         return response["state"]
+
+    async def compare_builds(
+        self,
+        process_id: str,
+        *,
+        baseline: type[Any],
+        candidate: type[Any],
+    ) -> ReplayComparison:
+        process = await self.process(process_id)
+        records = await self.read_stream(process["stream"])
+        if process.get("discard_input_on_success") and process.get("completed", 0) > len(records):
+            raise RuntimeError(
+                "replay comparison requires retained Process input records"
+            )
+        streams = {
+            *getattr(baseline, "__highwater_versioned_streams__", ()),
+            *getattr(candidate, "__highwater_versioned_streams__", ()),
+        }
+        histories = {
+            stream: await self.read_stream(stream)
+            for stream in sorted(streams)
+        }
+        return await compare_process_builds(
+            baseline,
+            candidate,
+            records,
+            versioned_histories=histories,
+        )
 
     async def stream_filter(self, operator_id: str) -> dict[str, Any]:
         return await self._request(

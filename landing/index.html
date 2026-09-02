@@ -70,7 +70,7 @@
                 <span class="copy-label" aria-live="polite">Copy</span>
               </button>
             </div>
-            <p class="hero-note">Run locally in five minutes. SDKs for Python, Java, Go, and TypeScript.</p>
+            <p class="hero-note">Python SDK available. More language SDKs will follow.</p>
           </div>
 
           <div class="product-window" aria-label="AI shopping assistant using a temporal join and durable user state">
@@ -116,9 +116,9 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
             <p>Highwater supplies per-key ordering, durable state, timers, atomic state and outbox commits, and recovery around your handler.</p>
           </div>
           <div class="pain-ledger" aria-label="Hard parts of stateful streaming applications">
-            <article><span>01</span><h3>Upgrade code without stopping traffic</h3><p>Compare a new build against recorded work, then migrate selected sessions before a wider release.</p></article>
+            <article><span>01</span><h3>Upgrade code without stopping traffic</h3><p>Compare a new build against retained input, then migrate durable state when the build becomes active.</p></article>
             <article><span>02</span><h3>Scale workers as demand changes</h3><p>Move keys from committed state as traffic and model latency change.</p></article>
-            <article><span>03</span><h3>Call models and tools directly</h3><p>Keep agent behavior in ordinary language SDKs, with durable results and isolated tool execution.</p></article>
+            <article><span>03</span><h3>Call models and tools directly</h3><p>Keep agent behavior in Python while each application runs inside a bounded worker.</p></article>
             <article><span>04</span><h3>Recover only the affected keys</h3><p>Resume each key from its committed event, state, timer, and output boundary.</p></article>
           </div>
           <div class="recast-use-cases">
@@ -144,7 +144,7 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
           <div class="watermark-card">
             <div class="watermark-head"><span>Order fulfillment</span><span class="live-badge"><i></i> live</span></div>
             <div class="timeline"><p class="sr-only">Created at 10:02, paid at 10:06, and an address update for 10:04 arrived late. The source watermark has advanced through 10:12.</p><div class="timeline-labels"><span>10:00</span><span>10:05</span><span>10:10</span><span>10:15</span></div><div class="timeline-track"><span class="event-dot event-one" data-label="created"></span><span class="event-dot event-two" data-label="paid"></span><span class="event-dot late-dot" data-label="address updated"></span><span class="watermark-line"><b>watermark 10:12</b></span></div></div>
-            <div class="gate-code"><span class="gate-icon">⌁</span><code>await streaming.wait_until(<br>&nbsp;&nbsp;streaming.event_time &gt;= ship_at<br>)</code><span class="gate-open">gate open</span></div>
+            <div class="gate-code"><span class="gate-icon">⌁</span><code>@streaming.process(<br>&nbsp;&nbsp;key="order_id",<br>&nbsp;&nbsp;wait_until=streaming.complete)</code><span class="gate-open">event eligible</span></div>
           </div>
         </div>
       </section>
@@ -152,7 +152,7 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
       <section class="section batch-section" id="batching" data-section="06 / adaptive batching">
         <div class="shell">
           <div class="batch-callout">
-            <div class="batch-copy"><p class="kicker">Adaptive batching</p><h2>Fill model batches up to a latency budget.</h2><p>Highwater groups requests with the same model, version, parameters, and shape. It dispatches when the batch fills or the oldest request reaches its latency limit.</p><p class="batch-boundary">Highwater groups and schedules compatible requests. Your model server executes each batch.</p></div>
+            <div class="batch-copy"><p class="kicker">Adaptive batching</p><h2>Fill model batches up to a latency budget.</h2><p>Highwater groups eligible requests for the same batch handler. It dispatches when the batch fills or the oldest request reaches its latency limit.</p><p class="batch-boundary">Your handler chooses the model, version, parameters, and shape. Your model server executes each batch.</p></div>
             <div class="batch-visual">
               <div class="batch-meter"><div class="meter-head"><span>Llama 3.1 8B · v3</span><strong>56 / 64</strong></div><div class="meter-track"><span></span></div><div class="meter-foot"><span>Oldest request</span><strong>18 ms <i>/ 25 ms</i></strong></div></div>
               <div class="batch-rule"><span>Dispatch on</span><strong>batch size</strong><i>or</i><strong>latency budget</strong></div>
@@ -180,15 +180,15 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
 
       <section class="section upgrades-section" id="upgrades" data-section="04 / upgrades">
         <div class="shell">
-          <div class="section-heading split-heading upgrade-heading"><div><p class="kicker">Application upgrades</p><h2>Ship new code without discarding live application state.</h2></div><p>Replay recorded model and tool results through the new build, compare state and output, then canary selected sessions.</p></div>
-          <div class="upgrade-board" aria-label="A new application build continues from existing durable Process state"><div class="upgrade-board-head"><span>support-agent</span><span><i></i> production</span></div><div class="release-track"><article class="release-card release-current"><div><span>Current release</span><b>serving</b></div><strong>Build 17</strong><small>Handler v1 · state schema 3</small></article><div class="release-connector" aria-hidden="true"><span></span><b>canary</b></div><article class="release-card release-next"><div><span>Next release</span><b>ready</b></div><strong>Build 18</strong><small>Handler v2 · state schema 4</small></article></div><div class="state-continuity"><div><span>Durable Process state</span><strong>Context stays attached to each key</strong></div><div class="state-keys" aria-label="Example application keys"><span>session-a</span><span>session-b</span><span>session-c</span><span>session-d</span></div><p>In-flight work finishes on its assigned build. A failed canary publishes no migrated state or output. After promotion, a rollback changes the code version while state continues through a forward migration.</p></div></div>
+          <div class="section-heading split-heading upgrade-heading"><div><p class="kicker">Application upgrades</p><h2>Ship new code without discarding live application state.</h2></div><p>Replay retained input and versioned state through both builds. Inspect every state and output difference before activating the migration.</p></div>
+          <div class="upgrade-board" aria-label="A new application build continues from existing durable Process state"><div class="upgrade-board-head"><span>support-agent</span><span><i></i> production</span></div><div class="release-track"><article class="release-card release-current"><div><span>Current release</span><b>serving</b></div><strong>Build 17</strong><small>Handler v1 · state schema 3</small></article><div class="release-connector" aria-hidden="true"><span></span><b>compare</b></div><article class="release-card release-next"><div><span>Next release</span><b>ready</b></div><strong>Build 18</strong><small>Handler v2 · state schema 4</small></article></div><div class="state-continuity"><div><span>Durable Process state</span><strong>Context stays attached to each key</strong></div><div class="state-keys" aria-label="Example application keys"><span>session-a</span><span>session-b</span><span>session-c</span><span>session-d</span></div><p>In-flight work finishes on its assigned build. Replay comparison writes no state or output. Activation applies declared forward migrations as each key next runs.</p></div></div>
         </div>
       </section>
 
       <section class="section sandbox-section" id="sandboxing" data-section="02 / sandboxing">
         <div class="shell">
-          <div class="section-heading split-heading sandbox-heading"><div><p class="kicker">Agent tool isolation</p><h2>Run generated code inside a workload policy boundary.</h2></div><p>Each tool invocation runs in an isolated microVM. Highwater operates the pools in Highwater Cloud or provisions them in your Kubernetes cluster.</p></div>
-          <div class="sandbox-diagram"><div class="sandbox-diagram-head"><span>support-agent / build-18</span><span><i></i> warm pool</span></div><div class="sandbox-map"><div class="sandbox-boundary"><span class="boundary-label">Per-invocation microVM</span><div class="runtime-stack"><div><span>Signed bundle</span><strong>agent tools · libraries</strong></div><div><span>Scoped secrets</span><strong>workload identity</strong></div><div><span>Network</span><strong>default-deny egress</strong></div><div><span>Resources</span><strong>CPU · memory · runtime</strong></div></div><div class="sandbox-policy"><span>Read-only root</span><span>Audited execution</span><span>Bounded resources</span><span>Explicit outbound access</span></div></div><div class="capability-channel" aria-hidden="true"><span></span><b>Scoped capability</b></div><div class="service-vault"><div class="vault-mark"><img src="./assets/mark.svg" width="36" height="36" alt=""><span>Highwater</span></div><p>Execution endpoint</p><strong>Assign · record · terminate</strong><div class="vault-assets"><span>Operation identity</span><span>Audit events</span><span>Policy record</span><span>Worker lease</span></div><small>No cloud credentials enter the tool sandbox</small></div></div><div class="sandbox-diagram-foot"><span>Cached 32 MB bundle on c7i.4xlarge</span><span>Assignment to user code · 7 ms warm p99 · 180 ms cold p99</span></div></div>
+          <div class="section-heading split-heading sandbox-heading"><div><p class="kicker">Application isolation</p><h2>Run generated code inside a workload policy boundary.</h2></div><p>Each application build runs in a sandboxed worker pool. Highwater operates the pool in Highwater Cloud or provisions the same profile in your Kubernetes cluster.</p></div>
+          <div class="sandbox-diagram"><div class="sandbox-diagram-head"><span>support-agent / build-18</span><span><i></i> isolated pool</span></div><div class="sandbox-map"><div class="sandbox-boundary"><span class="boundary-label">Sandboxed application worker</span><div class="runtime-stack"><div><span>Signed bundle</span><strong>agent tools · libraries</strong></div><div><span>Scoped secrets</span><strong>workload identity</strong></div><div><span>Network</span><strong>default-deny egress</strong></div><div><span>Resources</span><strong>CPU · memory · processes</strong></div></div><div class="sandbox-policy"><span>Read-only root</span><span>Non-root user</span><span>Bounded resources</span><span>Explicit outbound access</span></div></div><div class="capability-channel" aria-hidden="true"><span></span><b>Scoped capability</b></div><div class="service-vault"><div class="vault-mark"><img src="./assets/mark.svg" width="36" height="36" alt=""><span>Highwater</span></div><p>Private execution endpoint</p><strong>Assign · fence · commit</strong><div class="vault-assets"><span>Deployment identity</span><span>Allowed build IDs</span><span>Task queue scope</span><span>Worker lease</span></div><small>No storage or cluster credentials enter the worker sandbox</small></div></div><div class="sandbox-diagram-foot"><span>gVisor reference profile</span><span>Read-only root · no capabilities · bounded CPU and memory</span></div></div>
         </div>
       </section>
 
@@ -219,13 +219,13 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
         <div class="shell">
           <div class="section-heading split-heading">
             <div><p class="kicker">Reference testing</p><h2>Tested under load, failure, and upgrade.</h2></div>
-            <p>Sustained keyed workloads with injected worker loss and rolling application changes.</p>
+            <p>Keyed throughput, worker reassignment, state migration, and owner-crash recovery.</p>
           </div>
           <div class="proof-grid">
-            <article><strong>1M+</strong><span>events/s in a compact replicated deployment</span></article>
-            <article><strong>Elastic</strong><span>throughput grows as workers join</span></article>
-            <article><strong>Reconciled</strong><span>acknowledged events checked after worker loss</span></article>
-            <article><strong>Seconds</strong><span>to resume keys assigned to a failed worker</span></article>
+            <article><strong>100k+</strong><span>median durable transitions/s on a development machine</span></article>
+            <article><strong>50k</strong><span>completed events/s required by the release gate</span></article>
+            <article><strong>2 → 4</strong><span>workers with every keyed state reconciled after scale-out</span></article>
+            <article><strong>Recovered</strong><span>checkpoint and journal tail after an S3 owner crash</span></article>
           </div>
           <div class="checkpoint-proof" aria-label="Tiered storage checkpoint benchmark">
             <div class="checkpoint-proof-head"><span>Tiered state checkpoint</span><strong>Large state · sustained mutation</strong></div>
@@ -240,8 +240,8 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
           </div>
           <div class="soak-proof"><span>Continuous soak</span><strong>Sustained traffic</strong><i></i><strong>Repeated worker loss</strong><i></i><strong>Rolling stateful upgrades</strong><i></i><strong>Reconciliation after every fault</strong></div>
           <div class="ai-proof"><span>Inference scheduler test</span><strong>Model-aware request grouping</strong><i></i><strong>Concurrent agent sessions</strong><i></i><strong>Batch-size dispatch</strong><i></i><strong>Latency-budget dispatch</strong><i></i><strong>Scheduler overhead measured separately</strong></div>
-          <div class="sandbox-proof"><span>Tool sandbox test</span><strong>Cached warm pools</strong><strong>Cold-start path</strong><strong>Concurrent invocations</strong><strong>Assignment-to-user-code timing</strong></div>
-          <details class="proof-method"><summary>Test method and boundaries</summary><div><p>The stream test runs a compact deployment across three availability zones. Workers keep hot state on local NVMe while object storage holds the durable journal and content-addressed checkpoint blocks.</p><p>The workload mutates keyed state and writes a durable outgoing message for each event. Checkpoints upload changed blocks while retaining references to unchanged state. Recovery restores the newest checkpoint before replaying the remaining journal tail.</p><p>A separate reconciliation ledger checks per-key order and outgoing-message cardinality after worker termination and stateful upgrades. Recovery measurements cover the keys assigned to failed workers. Unaffected keys continue serving.</p><p>Inference tests report scheduling separately from model execution. Sandbox tests measure assignment through the start of user code across warm and cold paths.</p></div></details>
+          <div class="sandbox-proof"><span>Worker sandbox test</span><strong>Non-root UID</strong><strong>Read-only root</strong><strong>No network or capabilities</strong><strong>Bounded compute and processes</strong></div>
+          <details class="proof-method"><summary>Test method and boundaries</summary><div><p>The durable throughput test sends 100,000 unique keyed events through ten Process partitions and ten execution instances. Three runs completed between 61,238 and 116,900 events per second after authoritative admission and completion appends.</p><p>The scale test processes 200 keys with two workers, stops them, redistributes the partitions across four workers, and checks every key after another event. Each final state contains both ordered transitions.</p><p>The S3 chaos test terminates a partition owner after a checkpoint, starts a replacement owner, and verifies checkpoint restoration, journal-tail replay, and fencing of stale work.</p><p>The sandbox test runs the packaged application worker as UID 65532 with a read-only root filesystem, disabled network, dropped capabilities, and bounded CPU, memory, and process count.</p></div></details>
         </div>
       </section>
 
@@ -266,10 +266,10 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
             </article>
           </div>
           <div class="production-row">
-            <article><span>SDKs</span><strong>Python, Java, Go, TypeScript</strong></article>
-            <article><span>Sources</span><strong>Kafka, Kinesis, Pub/Sub, HTTPS</strong></article>
-            <article><span>Operations</span><strong>Per-key traces, model and tool calls, token cost, retries</strong></article>
-            <article><span>Isolation</span><strong>Application workers plus per-invocation microVM tool sandboxes</strong></article>
+            <article><span>Application API</span><strong>Python SDK, with more languages planned</strong></article>
+            <article><span>Event admission</span><strong>SDK and durable HTTPS endpoint</strong></article>
+            <article><span>Execution</span><strong>Hosted workers or your Kubernetes cluster</strong></article>
+            <article><span>Isolation</span><strong>Sandboxed application workers with scoped workload identity</strong></article>
           </div>
           <div class="state-security"><span>Security and compliance</span><strong>Customer-managed KMS</strong><i></i><a href="#" data-config-link="soc2">SOC 2 report →</a><i></i><a href="#" data-config-link="pci">PCI responsibility matrix →</a><i></i><strong>365-day audit retention</strong><i></i><a href="#" data-config-link="security">Threat model →</a></div>
           <div class="trace-contract" aria-label="Example per-key execution trace">
@@ -282,8 +282,8 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
       <section class="section cta-section" id="access" data-section="10 / first run">
         <div class="shell">
           <div class="cta-card">
-            <div class="cta-copy"><p class="kicker">Start with one keyed workload</p><h2>Run locally in five minutes.</h2><p>Send events, stop a worker, and watch each key resume. The agent continues with its state and committed tool results.</p><div class="cta-actions"><a class="button" href="#" data-config-link="demo">Open the live agent demo <span aria-hidden="true">→</span></a><a class="text-link light-link" href="#" data-config-link="earlyAccess">Design an evaluation</a></div></div>
-            <div class="first-run"><div class="first-run-head"><span>First run</span><span>~ 5 min</span></div><ol><li><span>1</span><code>pip install highwater</code></li><li><span>2</span><code>highwater dev agent.py</code></li><li><span>3</span><code>highwater send events.jsonl</code></li></ol><div class="run-result"><i></i> 3 sessions active · state committed</div></div>
+            <div class="cta-copy"><p class="kicker">Start with one keyed workload</p><h2>Bring one stateful workload.</h2><p>Review its key, event-time needs, upgrade path, failure contract, and scaling envelope with us.</p><div class="cta-actions"><a class="button" href="#" data-config-link="earlyAccess">Book a technical review <span aria-hidden="true">→</span></a><a class="text-link light-link" href="#" data-config-link="demo">Open the live agent demo</a></div></div>
+            <div class="first-run"><div class="first-run-head"><span>Evaluation</span><span>one workload</span></div><ol><li><span>1</span><code>Define the Process key and state</code></li><li><span>2</span><code>Replay retained events across two builds</code></li><li><span>3</span><code>Test scale-out and worker loss</code></li></ol><div class="run-result"><i></i> Leave with measured workload boundaries</div></div>
           </div>
         </div>
       </section>

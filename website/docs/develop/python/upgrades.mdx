@@ -38,3 +38,28 @@ highwater-worker app --target "$HIGHWATER_EXECUTION_ADDRESS"
 The platform validates definitions, starts the new version, routes new activations only after it is ready, and drains work pinned to the previous version. Rollback changes routing; it never asks old code to decode newer state.
 
 Renaming a Process, changing its key, or changing event identity is a data migration. Deploy it as a new Process and backfill or redirect explicitly.
+
+## Compare two builds before activation
+
+Retain the Process input stream when a deployment needs replay comparison. Highwater can run the retained events and versioned reference history through two decorated Process definitions:
+
+```python
+comparison = await client.compare_builds(
+    "shopping-assistant",
+    baseline=ShoppingAssistantV1,
+    candidate=ShoppingAssistantV2,
+)
+
+for difference in comparison.differences:
+    print(
+        difference.event_id,
+        difference.baseline_state,
+        difference.candidate_state,
+        difference.baseline_output,
+        difference.candidate_output,
+    )
+```
+
+Comparison writes no Process state or output. Each difference identifies the original event and key. Versioned lookups resolve at the original event time.
+
+The comparison executes both handlers. Supply recorded responses or evaluation implementations for model, tool, and service calls. This keeps external effects out of the comparison and makes nondeterministic dependencies repeatable.

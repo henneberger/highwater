@@ -9,14 +9,13 @@ import uuid
 from highwater import (
     Client,
     Comparison,
-    FilterSpec,
     LatePolicy,
     StreamOptions,
     WatermarkMode,
-    WindowAggregateSpec,
     WindowAggregation,
     workflow,
 )
+from highwater.dag import Dag
 
 
 @workflow.defn
@@ -48,6 +47,43 @@ def encoded(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 
 
+def topology(
+    stream: str,
+    alerts: str,
+    sliding_max: str,
+    alert_changes: str,
+) -> Dag:
+    return (
+        Dag("iot-sensor-metrics")
+        .stream(stream, StreamOptions(
+            allowed_lateness=5,
+            late_policy=LatePolicy.SIDE_OUTPUT,
+        ))
+        .stream(alert_changes, StreamOptions(
+            watermark_mode=WatermarkMode.SOURCE_MANAGED,
+        ))
+        .filter(
+            alerts,
+            input=stream,
+            workflow=HighTemperatureAlertWorkflow,
+            field="temperature",
+            comparison=Comparison.GREATER_THAN,
+            operand=100,
+            output=alert_changes,
+        )
+        .window(
+            sliding_max,
+            input=stream,
+            workflow=SensorWindowMaxWorkflow,
+            size=30,
+            slide=10,
+            start_at=0,
+            aggregation=WindowAggregation.MAX,
+            value="temperature",
+        )
+    )
+
+
 async def main(target: str) -> None:
     client = Client(target)
     suffix = uuid.uuid4().hex[:8]
@@ -57,32 +93,7 @@ async def main(target: str) -> None:
     source = f"iot-gateway-{suffix}"
     alert_changes = f"alert-changes-{suffix}"
 
-    await client.create_stream(stream, options=StreamOptions(
-        allowed_lateness=5,
-        late_policy=LatePolicy.SIDE_OUTPUT,
-    ))
-    await client.create_stream(alert_changes, options=StreamOptions(
-        watermark_mode=WatermarkMode.SOURCE_MANAGED,
-    ))
-    await client.deploy(FilterSpec(
-        operator_id=alerts,
-        stream=stream,
-        workflow=HighTemperatureAlertWorkflow,
-        field="temperature",
-        comparison=Comparison.GREATER_THAN,
-        operand=100,
-    ))
-    await client.deploy(WindowAggregateSpec(
-        operator_id=sliding_max,
-        stream=stream,
-        workflow=SensorWindowMaxWorkflow,
-        window_size=30,
-        slide=10,
-        start_at=0,
-        aggregation=WindowAggregation.MAX,
-        value_field="temperature",
-    ))
-    await client.connect_operator(alerts, alert_changes)
+    await topology(stream, alerts, sliding_max, alert_changes).deploy(client)
 
     readings = [
         ("sensor-a", 5, 90),

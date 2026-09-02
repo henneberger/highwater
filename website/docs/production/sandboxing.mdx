@@ -1,0 +1,32 @@
+---
+title: Sandboxed execution
+description: Bound application workers and scope their service identity.
+---
+
+Highwater isolates application code at the worker-pool boundary. Each immutable application build runs under its own container policy and deployment identity.
+
+## Reference boundary
+
+The reference Kubernetes profile applies these controls:
+
+- gVisor `RuntimeClass`;
+- non-root UID and GID 65532;
+- read-only root filesystem;
+- dropped Linux capabilities;
+- disabled privilege escalation;
+- runtime-default seccomp;
+- bounded CPU, memory, process count, and temporary storage;
+- disabled service-account token mounting;
+- default-deny ingress and restricted egress.
+
+The worker receives a Highwater execution token. It does not receive journal, object-storage, or cluster credentials.
+
+## Network access
+
+The supplied policy permits DNS and the private Highwater execution endpoint. Add destinations for models, tools, or internal services to the deployment policy. Keep those rules specific to the application build.
+
+## Hosted execution
+
+Highwater Cloud can operate the worker pool. Customer-cloud deployments run the same worker image and policy beside private models and data. Both forms use the private execution API and deployment-scoped identity.
+
+The sandbox contains the complete application worker. Tool-level or per-invocation isolation requires a separate sandbox service behind an explicitly allowed destination.

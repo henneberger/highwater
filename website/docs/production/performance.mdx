@@ -18,3 +18,21 @@ The dominant application controls are:
 Measure accepted events, committed transitions, output delivery, p50/p99 end-to-end latency, retry rate, watermark lag, and backlog age. Throughput without durable completion is not application throughput.
 
 One key remains serial when transitions do not commute. More capacity helps independent keys, not a single globally ordered state machine.
+
+## Durable throughput test
+
+The release benchmark submits 100,000 unique keyed events across ten Process partitions and ten execution instances. Admission and completion are acknowledged after their authoritative append.
+
+```bash
+PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
+  --events 100000 \
+  --runs 3 \
+  --partitions 10 \
+  --execution-instances 10 \
+  --handler batch \
+  --minimum-throughput 50000
+```
+
+The September 1, 2026 development-machine run completed 61,238 to 116,900 events per second, with a median of 110,696. The release workflow runs the same durable path with a 50,000 completed-events-per-second floor on Linux.
+
+This test measures the engine and a minimal keyed handler. Model calls, network services, state size, key skew, and storage latency shape application throughput and need workload-specific measurement.

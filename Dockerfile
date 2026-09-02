@@ -21,9 +21,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV PYTHONPATH=/app
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md setup.py ./
 COPY src ./src
 COPY examples ./examples
+COPY --from=engine /out/highwater-server /app/src/highwater/bin/highwater-server
 RUN python -m pip install --no-cache-dir .
 COPY --from=engine /out/highwater-server /usr/local/bin/highwater-server
 COPY deploy/fly/entrypoint.sh /usr/local/bin/highwater-cloud

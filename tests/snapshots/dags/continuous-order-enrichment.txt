@@ -1,0 +1,16 @@
+dag continuous-order-enrichment
+
+streams
+  customer-profile-versions [watermark_mode=source_managed]
+  orders-ingress [watermark_mode=source_managed]
+  orders-ready [watermark_mode=source_managed]
+
+operators
+  order-intake [process] workflow=OrderIntake state=v1 key=customer_id event_time=occurred_at gate=immediate batch=64/0.005s
+  orders-at-profile-version [temporal join] workflow=FulfillReadyOrder type=left as_of=probe.event_time
+
+edges
+  customer-profile-versions -> orders-at-profile-version [versions key=record.key]
+  order-intake -> orders-ready [changelog]
+  orders-ingress -> order-intake [events key=customer_id event_time=occurred_at]
+  orders-ready -> orders-at-profile-version [probe]

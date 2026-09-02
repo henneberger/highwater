@@ -9,11 +9,11 @@ from highwater import (
     Client,
     LatePolicy,
     StreamOptions,
-    WindowAggregateSpec,
     WindowAggregation,
     wait_for_watermark,
     workflow,
 )
+from highwater.dag import Dag
 
 
 @workflow.defn
@@ -37,30 +37,36 @@ class EventTimeGateWorkflow:
         return {"stream": stream, "watermark_reached": event_time}
 
 
+def topology(stream: str, schedule: str) -> Dag:
+    return (
+        Dag("event-time-windows")
+        .stream(stream, StreamOptions(
+            partitions=2,
+            max_out_of_orderness=2,
+            allowed_lateness=1,
+            idle_timeout=30,
+            alignment_max_drift=20,
+            late_policy=LatePolicy.SIDE_OUTPUT,
+        ))
+        .window(
+            schedule,
+            input=stream,
+            workflow=WindowSumWorkflow,
+            size=10,
+            start_at=0,
+            aggregation=WindowAggregation.SUM,
+        )
+    )
+
+
 async def main(target: str) -> None:
     client = Client(target)
     suffix = uuid.uuid4().hex[:8]
     stream = f"measurements-{suffix}"
     schedule = f"window-sum-{suffix}"
     source = f"measurements-source-{suffix}"
-    await client.create_stream(stream, options=StreamOptions(
-        partitions=2,
-        max_out_of_orderness=2,
-        allowed_lateness=1,
-        idle_timeout=30,
-        alignment_max_drift=20,
-        late_policy=LatePolicy.SIDE_OUTPUT,
-    ))
-    window_sum = WindowAggregateSpec(
-        operator_id=schedule,
-        stream=stream,
-        workflow=WindowSumWorkflow,
-        window_size=10,
-        start_at=0,
-        aggregation=WindowAggregation.SUM,
-    )
-    await client.deploy(window_sum)
-    await client.deploy(window_sum)
+    await topology(stream, schedule).deploy(client)
+    await topology(stream, schedule).deploy(client)
     gate = await client.start_workflow(
         EventTimeGateWorkflow,
         stream,

@@ -1,6 +1,6 @@
 window.HIGHWATER_SITE = {
   docs: "https://highwater.cloud/docs/",
-  quickstart: "https://highwater.cloud/docs/quickstart/keyed-state",
+  quickstart: "https://highwater.cloud/docs/quickstart",
   demo: "https://demo.highwater.cloud/",
   earlyAccess: "https://calendly.com/henneberger-daniel/30min",
   github: "https://github.com/henneberger/highwater",

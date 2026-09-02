@@ -4,7 +4,11 @@ pub(crate) fn operator_input_streams(
     operator_id: &str,
 ) -> Result<Vec<String>> {
     if let Some(process) = transaction.get::<DurableProcess>(&process_key(operator_id))? {
-        return Ok(vec![process.stream]);
+        let mut inputs = vec![process.stream];
+        inputs.extend(process.versioned_streams);
+        inputs.sort();
+        inputs.dedup();
+        return Ok(inputs);
     }
     if let Some(schedule) = transaction.get::<WindowSchedule>(&stream_schedule_key(operator_id))? {
         return Ok(vec![schedule.stream]);

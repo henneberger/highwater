@@ -14,7 +14,6 @@ from highwater import (
     ProcessOptions,
     RetryPolicy,
     StreamOptions,
-    TemporalJoinSpec,
     TemporalJoinType,
     WatermarkMode,
     current_activity,
@@ -22,6 +21,7 @@ from highwater import (
     streaming,
     workflow,
 )
+from highwater.dag import Dag
 
 
 @dataclass(frozen=True)
@@ -152,30 +152,32 @@ async def run_demo(target: str) -> dict:
     customer_profiles = f"customer-profiles-{suffix}"
     fulfillment_id = f"orders-at-customer-version-{suffix}"
 
-    intake = await client.start(
-        OrderIntake,
-        process_id=intake_id,
-        options=ProcessOptions(key="customer_id", task_queue="orders"),
-    )
-    await client.create_stream(
-        ready_stream,
-        options=StreamOptions(watermark_mode=WatermarkMode.SOURCE_MANAGED),
-    )
-    await client.create_stream(
-        customer_profiles,
-        options=StreamOptions(watermark_mode=WatermarkMode.SOURCE_MANAGED),
-    )
-    await client.deploy(
-        TemporalJoinSpec(
-            operator_id=fulfillment_id,
-            probe_stream=ready_stream,
-            version_stream=customer_profiles,
+    input_stream = f"{intake_id}-input"
+    source_managed = StreamOptions(watermark_mode=WatermarkMode.SOURCE_MANAGED)
+    dag = (
+        Dag("durable-order-pipeline")
+        .stream(input_stream)
+        .stream(ready_stream, source_managed)
+        .stream(customer_profiles, source_managed)
+        .process(
+            OrderIntake,
+            input=input_stream,
+            process_id=intake_id,
+            options=ProcessOptions(key="customer_id", task_queue="orders"),
+            output=ready_stream,
+        )
+        .temporal_join(
+            fulfillment_id,
+            probe=ready_stream,
+            versions=customer_profiles,
             workflow=FulfillReadyOrder,
             task_queue="orders",
             join_type=TemporalJoinType.LEFT,
         )
     )
-    await client.connect_operator(intake_id, ready_stream)
+    await dag.deploy(client)
+    intake = await client.get_process_handle(intake_id)
+    intake.owns_input = True
 
     order_id = f"order-{suffix}"
     customer_id = f"customer-{suffix}"

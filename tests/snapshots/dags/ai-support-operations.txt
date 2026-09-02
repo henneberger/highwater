@@ -1,0 +1,52 @@
+dag ai-support-operations
+
+streams
+  account-policy-versions [watermark_mode=source_managed]
+  agent-decisions [watermark_mode=source_managed]
+  customer-feedback [watermark_mode=source_managed]
+  daily-feedback-scores [watermark_mode=source_managed]
+  escalations [watermark_mode=source_managed]
+  hourly-token-usage [watermark_mode=source_managed]
+  human-handoffs [watermark_mode=source_managed]
+  pager-events [watermark_mode=source_managed]
+  resolution-outcomes [watermark_mode=source_managed]
+  routed-escalations [watermark_mode=source_managed]
+  service-plan-versions [watermark_mode=source_managed]
+  support-events [watermark_mode=source_managed]
+  support-knowledge-versions [watermark_mode=source_managed]
+  unique-support-events [watermark_mode=source_managed]
+
+operators
+  aggregate-daily-feedback-scores [window aggregate] workflow=FeedbackScoreWindow aggregation=sum size=86400s slide=86400s start=0 value=score
+  aggregate-hourly-token-usage [window aggregate] workflow=TokenUsageWindow aggregation=sum size=3600s slide=300s start=0 value=tokens
+  coordinate-handoffs [process] workflow=EscalationCoordinator state=v1 key=customer_id gate=immediate batch=64/0.005s
+  deduplicate-support-events [deduplicate] workflow=KeepSupportMessage keep=first_by_event_time
+  match-decisions-to-feedback [interval join] workflow=ResolutionOutcome type=inner bounds=[0s,604800s]
+  page-high-priority [filter] workflow=PageOnCall predicate=priority greater_than_or_equal 3
+  route-escalations [temporal join] workflow=RouteAtDecisionTime type=left as_of=probe.event_time
+  select-escalations [filter] workflow=EscalationDecision predicate=requires_human equal true
+  support-triage [process] workflow=SupportTriage state=v2 key=customer_id event_time=occurred_at gate=immediate batch=64/0.005s migrates=1
+
+edges
+  account-policy-versions -> support-triage [versioned lookup key=customer_id as_of=event_time completeness=required]
+  agent-decisions -> aggregate-hourly-token-usage [keyed event-time records]
+  agent-decisions -> match-decisions-to-feedback [left key=record.key]
+  agent-decisions -> select-escalations [records]
+  aggregate-daily-feedback-scores -> daily-feedback-scores [changelog]
+  aggregate-hourly-token-usage -> hourly-token-usage [changelog]
+  coordinate-handoffs -> human-handoffs [changelog]
+  customer-feedback -> aggregate-daily-feedback-scores [keyed event-time records]
+  customer-feedback -> match-decisions-to-feedback [right key=record.key]
+  deduplicate-support-events -> unique-support-events [changelog]
+  escalations -> route-escalations [probe]
+  human-handoffs -> page-high-priority [records]
+  match-decisions-to-feedback -> resolution-outcomes [changelog]
+  page-high-priority -> pager-events [changelog]
+  route-escalations -> routed-escalations [changelog]
+  routed-escalations -> coordinate-handoffs [events key=customer_id]
+  select-escalations -> escalations [changelog]
+  service-plan-versions -> route-escalations [versions key=record.key]
+  support-events -> deduplicate-support-events [keyed event-time records]
+  support-knowledge-versions -> support-triage [versioned lookup key=topic as_of=event_time completeness=required]
+  support-triage -> agent-decisions [changelog]
+  unique-support-events -> support-triage [events key=customer_id event_time=occurred_at]

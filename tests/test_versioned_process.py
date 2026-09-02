@@ -64,6 +64,30 @@ class UpgradeAccountV2:
         return {"balance": self.balance, "currency": self.currency}
 
 
+batch_catalog = streaming.versioned("batch-catalog", key="product_id")
+
+
+@streaming.process(key="session_id", event_time="event_time", build_id="batch-catalog-v1")
+class BatchCatalogProcess:
+    @streaming.batch(max_size=64, max_delay=0.002)
+    async def apply(self, events, contexts):
+        transitions = []
+        for event, context in zip(events, contexts, strict=True):
+            product = await batch_catalog.get(
+                event.product_id, as_of=context.event_time,
+            )
+            views = (context.state or {}).get("views", 0) + 1
+            transitions.append(streaming.transition(
+                state={"category": product.category, "views": views},
+                emit=(
+                    {"product_id": event.product_id, "category": product.category}
+                    if views % 5 == 0
+                    else None
+                ),
+            ))
+        return transitions
+
+
 class VersionedProcessTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -190,6 +214,63 @@ class VersionedProcessTest(unittest.TestCase):
             finally:
                 worker_task.cancel()
                 await asyncio.gather(worker_task, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_batch_process_resolves_multiple_versioned_keys(self) -> None:
+        async def run() -> None:
+            client = Client(self.target, poll_interval=0.01)
+            await client.create_stream(
+                "batch-catalog",
+                options=StreamOptions(max_out_of_orderness=0, allowed_lateness=0),
+            )
+            for index in range(3):
+                await client.publish_event(
+                    "batch-catalog",
+                    {"product_id": f"product-{index}", "category": f"category-{index}"},
+                    key=f"product-{index}",
+                    event_time=index + 1,
+                    event_id=f"batch-catalog-{index}",
+                )
+            await client.advance_watermark("batch-catalog", 0, 10)
+            handle = await client.start(
+                BatchCatalogProcess,
+                process_id="batch-catalog-process",
+            )
+            registry = Registry()
+            registry.register_workflow(BatchCatalogProcess)
+            worker_tasks = {
+                asyncio.create_task(RustWorker(
+                    registry,
+                    target=self.target,
+                    process_partitions=(partition,),
+                ).run_forever())
+                for partition in range(1, 5)
+            }
+            try:
+                await handle.send_many([
+                    {
+                        "session_id": f"session-{index % 4}",
+                        "product_id": f"product-{index % 3}",
+                        "event_time": 5,
+                    }
+                    for index in range(20)
+                ])
+                drain = asyncio.create_task(handle.drain(timeout=10))
+                done, _ = await asyncio.wait(
+                    {drain, *worker_tasks}, return_when=asyncio.FIRST_COMPLETED,
+                )
+                for worker_task in done & worker_tasks:
+                    worker_task.result()
+                await drain
+                self.assertEqual((await handle.info())["completed"], 20)
+                self.assertEqual(await handle.state("session-1"), {
+                    "category": "category-2", "views": 5,
+                })
+            finally:
+                for worker_task in worker_tasks:
+                    worker_task.cancel()
+                await asyncio.gather(*worker_tasks, return_exceptions=True)
 
         asyncio.run(run())
 

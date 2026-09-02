@@ -3,7 +3,7 @@ import type { Overview, ProcessDetail, WorkflowDetail } from "./types";
 const API = ["localhost", "127.0.0.1"].includes(window.location.hostname)
   && !new URLSearchParams(window.location.search).has("cloud")
   ? "http://127.0.0.1:17333"
-  : "https://highwater-control.fly.dev";
+  : window.location.origin;
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number) { super(message); }

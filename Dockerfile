@@ -18,17 +18,19 @@ FROM python:3.12-slim-bookworm
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 highwater \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin highwater \
+    && install -d -o 65532 -g 65532 /var/lib/highwater/state /var/lib/highwater/objects
 WORKDIR /app
-ENV PYTHONPATH=/app
 COPY pyproject.toml README.md setup.py ./
 COPY src ./src
-COPY examples ./examples
 COPY --from=engine /out/highwater-server /app/src/highwater/bin/highwater-server
-RUN python -m pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir . \
+    && rm -rf /root/.cache /app/src /app/pyproject.toml /app/README.md /app/setup.py
 COPY --from=engine /out/highwater-server /usr/local/bin/highwater-server
-COPY deploy/fly/entrypoint.sh /usr/local/bin/highwater-cloud
-RUN chmod 0755 /usr/local/bin/highwater-cloud
 
-EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/highwater-cloud"]
+USER 65532:65532
+EXPOSE 7233 7234
+ENTRYPOINT ["highwater-server"]
+CMD ["--listen", "0.0.0.0:7233", "--state-dir", "/var/lib/highwater/state", "--object-store-dir", "/var/lib/highwater/objects"]

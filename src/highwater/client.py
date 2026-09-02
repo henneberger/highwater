@@ -250,13 +250,19 @@ class ProcessHandle:
                 "kind": ChangeKind.UPSERT,
                 "event_id": str(uuid.uuid4()),
             })
-        delay = 0.01
-        while True:
-            try:
-                return await self.client.publish_events(self.input, records)
-            except StreamBackpressure:
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 1.0)
+        responses = []
+        for offset in range(0, len(records), 1_000):
+            delay = 0.01
+            while True:
+                try:
+                    responses.extend(await self.client.publish_events(
+                        self.input, records[offset:offset + 1_000],
+                    ))
+                    break
+                except StreamBackpressure:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 1.0)
+        return responses
 
     async def info(self) -> dict[str, Any]:
         return await self.client.process(self.id)

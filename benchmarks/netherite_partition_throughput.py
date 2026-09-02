@@ -61,9 +61,11 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
         )
     port = available_port()
     target = f"http://127.0.0.1:{port}"
+    worker_target = target
     environment = os.environ.copy()
     environment["PYTHONPATH"] = f"{ROOT / 'src'}:{ROOT}"
     processes: list[subprocess.Popen[bytes]] = []
+    containers: list[str] = []
     with tempfile.TemporaryDirectory(prefix="highwater-netherite-benchmark-") as temporary:
         root = Path(temporary)
         server = subprocess.Popen(
@@ -74,7 +76,7 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
                 "--object-store-dir",
                 str(root / "objects"),
                 "--listen",
-                f"127.0.0.1:{port}",
+                f"{'0.0.0.0' if arguments.worker_runtime == 'docker' else '127.0.0.1'}:{port}",
                 "--node-id",
                 "benchmark",
                 "--key-groups",
@@ -94,27 +96,56 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
             assignments = assigned_partitions(
                 arguments.partitions, arguments.execution_instances
             )
+            if arguments.worker_runtime == "docker":
+                worker_target = f"http://host.docker.internal:{port}"
             for index, assignment in enumerate(assignments):
-                worker = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "highwater.rust_worker",
-                        "benchmarks.process_throughput",
-                        "--target",
-                        target,
+                worker_command = [
+                    sys.executable,
+                    "-m",
+                    "highwater.rust_worker",
+                    "benchmarks.process_throughput",
+                    "--target",
+                    worker_target,
+                    "--process-partitions",
+                    ",".join(str(partition) for partition in assignment),
+                    "--process-only",
+                ]
+                if arguments.worker_runtime == "docker":
+                    name = f"highwater-benchmark-{os.getpid()}-{index}"
+                    containers.append(name)
+                    worker_command = [
+                        "docker", "run", "--rm", "--name", name,
+                        "--add-host", "host.docker.internal:host-gateway",
+                        "--read-only",
+                        "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+                        "--cap-drop", "ALL",
+                        "--security-opt", "no-new-privileges",
+                        "--pids-limit", str(arguments.sandbox_pids),
+                        "--memory", arguments.sandbox_memory,
+                        "--cpus", str(arguments.sandbox_cpus),
+                        "--volume", f"{ROOT / 'benchmarks'}:/workload:ro",
+                        "--env", "PYTHONPATH=/workload",
+                        arguments.worker_image,
+                        "process_throughput",
+                        "--target", worker_target,
                         "--process-partitions",
                         ",".join(str(partition) for partition in assignment),
                         "--process-only",
-                    ],
+                    ]
+                worker = subprocess.Popen(
+                    worker_command,
                     cwd=ROOT,
                     env=environment,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
                 processes.append(worker)
-            benchmark_process = subprocess.run(
-                [
+            if arguments.worker_startup_delay > 0:
+                time.sleep(arguments.worker_startup_delay)
+                stopped = [process.returncode for process in processes[1:] if process.poll() is not None]
+                if stopped:
+                    raise RuntimeError(f"execution worker stopped during startup: {stopped}")
+            workload_command = [
                     sys.executable,
                     str(ROOT / "benchmarks/process_throughput.py"),
                     "--target",
@@ -133,14 +164,33 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
                     str(arguments.max_concurrency),
                     "--handler",
                     arguments.handler,
-                ],
-                cwd=ROOT,
-                env=environment,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=arguments.timeout,
-            )
+                    "--workload",
+                    arguments.workload,
+                    "--active-keys",
+                    str(arguments.active_keys),
+                ]
+            try:
+                benchmark_process = subprocess.run(
+                    workload_command,
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=arguments.timeout,
+                )
+            except subprocess.TimeoutExpired as error:
+                diagnostics = error.stderr or ""
+                if isinstance(diagnostics, bytes):
+                    diagnostics = diagnostics.decode(errors="replace")
+                raise TimeoutError(
+                    f"workload benchmark exceeded {arguments.timeout:g}s"
+                    + (f":\n{diagnostics.strip()}" if diagnostics.strip() else "")
+                ) from error
+            if benchmark_process.returncode != 0:
+                raise RuntimeError(
+                    "workload benchmark failed:\n" + benchmark_process.stderr.strip()
+                )
             result = json.loads(benchmark_process.stdout)
             result.update(
                 {
@@ -148,10 +198,18 @@ def benchmark(arguments: argparse.Namespace) -> dict[str, Any]:
                     "partitions": arguments.partitions,
                     "partition_assignments": assignments,
                     "durability_boundary": "authoritative append before admission and completion acknowledgement",
+                    "worker_runtime": arguments.worker_runtime,
                 }
             )
             return result
         finally:
+            if containers:
+                subprocess.run(
+                    ["docker", "rm", "--force", *containers],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
             for process in reversed(processes):
                 stop(process)
 
@@ -170,9 +228,17 @@ def main() -> None:
     parser.add_argument("--activation-batch-delay", type=float, default=0.002)
     parser.add_argument("--max-concurrency", type=int, default=100_000)
     parser.add_argument("--handler", choices=("batch", "event"), default="batch")
+    parser.add_argument("--workload", choices=("counter", "shopping"), default="shopping")
+    parser.add_argument("--active-keys", type=int, default=90_000)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--minimum-throughput", type=float, default=0)
+    parser.add_argument("--worker-runtime", choices=("host", "docker"), default="host")
+    parser.add_argument("--worker-image", default="highwater-worker:release-test")
+    parser.add_argument("--sandbox-cpus", type=float, default=2)
+    parser.add_argument("--sandbox-memory", default="512m")
+    parser.add_argument("--sandbox-pids", type=int, default=128)
+    parser.add_argument("--worker-startup-delay", type=float, default=0)
     arguments = parser.parse_args()
     if arguments.events <= 0:
         parser.error("--events must be positive")
@@ -182,6 +248,12 @@ def main() -> None:
         parser.error("--partitions must be between 1 and 255")
     if arguments.runs <= 0:
         parser.error("--runs must be positive")
+    if arguments.active_keys < 0:
+        parser.error("--active-keys must be non-negative")
+    if arguments.sandbox_cpus <= 0 or arguments.sandbox_pids <= 0:
+        parser.error("sandbox CPU and process limits must be positive")
+    if arguments.worker_startup_delay < 0:
+        parser.error("--worker-startup-delay must be non-negative")
     results = [benchmark(arguments) for _ in range(arguments.runs)]
     completed = [result["completed_events_per_second"] for result in results]
     admitted = [result["admission_events_per_second"] for result in results]
@@ -193,6 +265,8 @@ def main() -> None:
             "execution_instances": results[0]["execution_instances"],
             "partitions": arguments.partitions,
             "handler": arguments.handler,
+            "workload": arguments.workload,
+            "active_keys": results[0]["active_keys"],
             "median_admission_events_per_second": statistics.median(admitted),
             "median_completed_events_per_second": statistics.median(completed),
             "minimum_completed_events_per_second": min(completed),

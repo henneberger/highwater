@@ -63,7 +63,7 @@ jobs:
           highwater-server --listen 127.0.0.1:17233 --state-dir "$smoke_dir/state" --object-store-dir "$smoke_dir/objects" > "$smoke_dir/server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for attempt in {1..100}; do
+          for _ in {1..100}; do
             curl --fail --silent http://127.0.0.1:17233/health > /dev/null && break
             kill -0 "$server_pid"
             sleep 0.1
@@ -72,13 +72,22 @@ jobs:
           kill "$server_pid"
           wait "$server_pid" || true
           trap - EXIT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify Python 3.11 installation
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          python -c "import highwater; from highwater.server import binary_path; assert binary_path().is_file()"
+          highwater-server --help > /dev/null
       - name: Verify durable throughput floor
         if: runner.os == 'Linux'
         shell: bash
         run: |
           PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
-            --events 100000 --runs 1 --partitions 10 \
-            --execution-instances 10 --handler batch \
+            --events 100000 --active-keys 20000 --runs 1 --partitions 20 \
+            --execution-instances 20 --handler batch --workload shopping \
             --minimum-throughput 50000
       - uses: actions/upload-artifact@v4
         with:
@@ -87,6 +96,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
     environment:

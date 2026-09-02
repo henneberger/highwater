@@ -1,0 +1,66 @@
+name: Release readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: website/yarn.lock
+      - uses: azure/setup-kubectl@v4
+      - name: Configure native build
+        run: |
+          clang_lib="$(llvm-config --libdir)"
+          compgen -G "$clang_lib/libclang.so*" > /dev/null
+          echo "LIBCLANG_PATH=$clang_lib" >> "$GITHUB_ENV"
+      - name: Validate Rust workspace
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+          cargo build --release --locked --package highwater-server
+      - name: Validate Python and application workloads
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Validate S3 crash recovery
+        run: HIGHWATER_S3_CHAOS=1 PYTHONPATH=src python -m unittest tests.test_s3_chaos -v
+      - name: Validate documentation and deployment manifests
+        run: |
+          (cd website && yarn install --frozen-lockfile && yarn build)
+          kubectl apply --dry-run=client --validate=false -f deploy/kubernetes/hosted.yaml -o name
+      - name: Build sandboxed worker
+        run: docker build -f Dockerfile.worker -t highwater-worker:release-test .
+      - name: Validate representative durable throughput
+        run: |
+          PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
+            --events 100000 --active-keys 20000 --runs 1 \
+            --partitions 20 --execution-instances 20 \
+            --workload shopping --minimum-throughput 50000
+      - name: Validate sandboxed worker throughput
+        run: |
+          PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
+            --events 100000 --active-keys 20000 --runs 1 \
+            --partitions 20 --execution-instances 20 \
+            --workload shopping --worker-runtime docker \
+            --worker-image highwater-worker:release-test \
+            --worker-startup-delay 2 --minimum-throughput 25000
+      - name: Validate sandboxed engine ceiling
+        run: |
+          PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
+            --events 100000 --active-keys 100000 --runs 1 \
+            --partitions 10 --execution-instances 10 \
+            --workload counter --worker-runtime docker \
+            --worker-image highwater-worker:release-test \
+            --worker-startup-delay 2 --minimum-throughput 50000

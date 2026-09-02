@@ -33,7 +33,18 @@ highwater-autoscaler \
   --partitions 64
 ```
 
-The command supplies a decision to Highwater Cloud, Kubernetes, or another scheduler. The scheduler creates the requested workers and passes each worker its assigned partitions. Scale-down waits for the configured stabilization period and removes one replica at a time. Replica targets never exceed the number of executable partitions.
+The command can supply a decision to another scheduler. It can also watch a Process and update the Kubernetes scale subresource itself:
+
+```bash
+highwater-autoscaler \
+  --process shopping-assistant \
+  --target "$HIGHWATER_ADDRESS" \
+  --partitions 64 \
+  --watch \
+  --kubernetes-deployment shopping-assistant-workers
+```
+
+Scale-down waits for the configured stabilization period and removes one replica at a time. Replica targets never exceed the number of executable partitions. The production reference in `deploy/kubernetes/hosted.yaml` grants the autoscaler access only to its worker Deployment scale resource.
 
 ## Backpressure
 

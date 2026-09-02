@@ -1,41 +1,36 @@
 # Performance
 
-Highwater measures completed durable transitions, not handler calls or in-memory queue operations. The benchmark starts with empty state, admits 100,000 distinct keys, runs the Python application across disjoint partition assignments, and waits until every completion is committed. Both admission and completion acknowledgements follow an authoritative WAL append and sync.
+Highwater measures completed durable transitions. The primary benchmark starts with empty Process state, admits 100,000 product views across 20,000 shopping sessions and 10,000 products, and waits for every completion. Each transition updates bounded session history, calculates a recommendation score, and emits durable output every fifth view.
 
-## Partition scaling
+## Measured development-machine runs
 
-The following results were collected on one Apple Silicon development machine with 10 data partitions. Each value is the median of three runs; the minimum shows run-to-run headroom against the 50,000 events-per-second target.
+| Worker boundary | Completed events/s |
+| --- | ---: |
+| 20 host workers | 53,638 |
+| 20 hardened container workers | 30,608 |
+| 10 hardened container workers, minimal counter | 65,974 |
 
-| Execution instances | Median completed events/s | Minimum completed events/s |
-| ---: | ---: | ---: |
-| 1 | 55,310 | 52,372 |
-| 2 | 86,495 | 84,771 |
-| 5 | 99,951 | 95,048 |
-| 10 | 102,904 | 99,987 |
-
-Five instances using the ordinary per-event handler completed a median 89,029 events/s, with a minimum of 84,200 events/s. The batched handler reduces Python dispatch overhead but does not weaken the per-key transition or durability boundary.
-
-These are single-machine results, not a cluster capacity claim. They demonstrate that disjoint partition assignment distributes application compute and that the durable data path exceeds the current target. Multi-host service ownership, replicated persistence, and automatic placement require separate failure and capacity measurements.
+The container profile runs as UID 65532 with a read-only root filesystem, dropped capabilities, `no-new-privileges`, and CPU, memory, and process limits. These results describe one development machine. Cluster storage and networking need measurements in the release environment.
 
 ## Reproduce
 
-Build the service once, then run the self-contained harness:
-
 ```bash
-cargo build --release --bin highwater-server
-python3 benchmarks/netherite_partition_throughput.py \
-  --server target/release/highwater-server \
-  --events 100000 \
-  --partitions 10 \
-  --execution-instances 5 \
-  --handler batch \
-  --runs 3
+cargo build --release --package highwater-server
+docker build -f Dockerfile.worker -t highwater-worker:release-test .
+
+PYTHONPATH=src python3 benchmarks/netherite_partition_throughput.py \
+  --events 100000 --active-keys 20000 --runs 1 \
+  --partitions 20 --execution-instances 20 \
+  --workload shopping --minimum-throughput 50000
+
+PYTHONPATH=src python3 benchmarks/netherite_partition_throughput.py \
+  --events 100000 --active-keys 20000 --runs 1 \
+  --partitions 20 --execution-instances 20 \
+  --workload shopping --worker-runtime docker \
+  --worker-image highwater-worker:release-test \
+  --worker-startup-delay 2 --minimum-throughput 25000
 ```
 
-Use `--handler event` to measure the ordinary Process callback. The harness creates isolated durable state, starts the service, assigns every data partition to exactly one execution process, reports each run, and removes the temporary state after shutdown.
+The harness includes HTTP ingestion, key routing, serialization, authoritative admission and completion appends, Python execution, result transport, state transitions, and output commits. The shopping workload does not call an external model or service. Versioned lookups, event-time behavior, replay comparison, and owner recovery have separate correctness and failure tests.
 
-## Interpret the result
-
-The benchmark includes HTTP ingestion, key routing, serialization, object-WAL append and sync, scheduling, Python execution, result transport, and atomic completion. It excludes replicated storage latency, cross-host network latency, checkpoint upload, external sinks, and application-specific work.
-
-Throughput is expected to scale with independent partitions until storage, the service process, or the host becomes saturated. A single key is intentionally serial. Production capacity planning must also measure p99 completion latency, checkpoint pressure, recovery time, hot-key skew, and performance during owner movement.
+One noncommutative key remains serial. Production capacity testing also needs the target object store, network, sandbox runtime, key distribution, state size, and downstream calls.

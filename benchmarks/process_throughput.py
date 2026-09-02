@@ -38,6 +38,46 @@ class BatchedCounterProcess:
         ]
 
 
+@dataclass(frozen=True)
+class ProductView:
+    session_id: str
+    product_id: str
+    category: str
+    affinity: float
+
+
+@streaming.process(key="session_id", build_id="shopping-throughput-v1")
+class ShoppingSessionProcess:
+    @streaming.batch(max_size=1_024, max_delay=0.002)
+    async def recommend(self, events: list[ProductView], contexts):
+        transitions = []
+        for event, context in zip(events, contexts, strict=True):
+            previous = context.state or {}
+            recent = [*previous.get("recent", []), event.category][-5:]
+            views = previous.get("views", 0) + 1
+            category_matches = sum(value == event.category for value in recent)
+            score = event.affinity * (1 + category_matches / len(recent))
+            recommendation = (
+                {
+                    "session_id": event.session_id,
+                    "product_id": event.product_id,
+                    "score": score,
+                    "context_size": len(recent),
+                }
+                if views % 5 == 0
+                else None
+            )
+            transitions.append(streaming.transition(
+                state={
+                    "recent": recent,
+                    "views": views,
+                    "last_product_id": event.product_id,
+                },
+                emit=recommendation,
+            ))
+        return transitions
+
+
 async def benchmark(
     target: str,
     events: int,
@@ -47,15 +87,20 @@ async def benchmark(
     activation_batch_delay: float,
     max_concurrency: int,
     handler: str,
+    workload: str,
+    active_keys: int,
 ) -> None:
     client = Client(target, poll_interval=0.001)
     process_id = f"throughput-{uuid.uuid4().hex[:8]}"
-    definition = BatchedCounterProcess if handler == "batch" else CounterProcess
+    if workload == "shopping":
+        definition = ShoppingSessionProcess
+    else:
+        definition = BatchedCounterProcess if handler == "batch" else CounterProcess
     handle = await client.start(
         definition,
         process_id=process_id,
         options=ProcessOptions(
-            key="key",
+            key="session_id" if workload == "shopping" else "key",
             max_concurrency=max_concurrency,
             capacity=events * 2 + 1,
             batch_size=activation_batch_size,
@@ -68,7 +113,20 @@ async def benchmark(
         async with semaphore:
             await handle.send_many(batch)
 
-    values = [CounterEvent(f"key-{index}", 1) for index in range(events)]
+    if workload == "shopping":
+        categories = ("books", "games", "home", "outdoors", "audio")
+        session_count = active_keys or events
+        values = [
+            ProductView(
+                session_id=f"session-{index % session_count}",
+                product_id=f"product-{index % 10_000}",
+                category=categories[index % len(categories)],
+                affinity=((index * 37) % 1000) / 1000,
+            )
+            for index in range(events)
+        ]
+    else:
+        values = [CounterEvent(f"key-{index}", 1) for index in range(events)]
     started = time.perf_counter()
     await asyncio.gather(*(
         publish(values[index:index + batch_size])
@@ -88,6 +146,8 @@ async def benchmark(
         "activation_batch_delay": activation_batch_delay,
         "max_concurrency": max_concurrency,
         "handler": handler,
+        "workload": workload,
+        "active_keys": active_keys or events,
         "admission_events_per_second": events / (admitted - started),
         "completed_events_per_second": events / (finished - started),
         "admission_seconds": admitted - started,
@@ -105,6 +165,8 @@ if __name__ == "__main__":
     parser.add_argument("--activation-batch-delay", type=float, default=0.002)
     parser.add_argument("--max-concurrency", type=int, default=8_192)
     parser.add_argument("--handler", choices=("batch", "event"), default="batch")
+    parser.add_argument("--workload", choices=("counter", "shopping"), default="counter")
+    parser.add_argument("--active-keys", type=int, default=0)
     args = parser.parse_args()
     asyncio.run(benchmark(
         args.target,
@@ -115,4 +177,6 @@ if __name__ == "__main__":
         args.activation_batch_delay,
         args.max_concurrency,
         args.handler,
+        args.workload,
+        args.active_keys,
     ))

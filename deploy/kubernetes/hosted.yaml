@@ -1,0 +1,409 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: highwater-core
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: highwater-runtime
+data:
+  journal-uri: s3://HIGHWATER_JOURNAL_BUCKET/production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: highwater-core-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: highwater-core, node: a}
+  template:
+    metadata:
+      labels: {app: highwater-core, node: a}
+    spec:
+      serviceAccountName: highwater-core
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: highwater-core}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: core
+          image: ghcr.io/henneberger/highwater-server:IMAGE_TAG
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              exec highwater-server --listen 0.0.0.0:7233
+              --execution-listen 0.0.0.0:7234
+              --state-dir /var/lib/highwater/state
+              --object-store-dir /var/lib/highwater/objects
+              --journal "$(cat /config/journal-uri)"
+              --node-id core-a
+              --advertise-endpoint http://highwater-core-a:7234
+              --process-partitions 1,3
+              --log-shards 5
+              --api-token-file /secrets/api/token
+              --cluster-token-file /secrets/cluster/token
+              --execution-identity-file /secrets/execution/identities.json
+          ports:
+            - {name: public, containerPort: 7233}
+            - {name: execution, containerPort: 7234}
+          readinessProbe:
+            httpGet: {path: /health, port: public}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: public}
+            periodSeconds: 15
+          securityContext: &coreSecurity
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources: &coreResources
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          volumeMounts: &coreMounts
+            - {name: state, mountPath: /var/lib/highwater/state}
+            - {name: objects, mountPath: /var/lib/highwater/objects}
+            - {name: runtime, mountPath: /config, readOnly: true}
+            - {name: api-token, mountPath: /secrets/api, readOnly: true}
+            - {name: cluster-token, mountPath: /secrets/cluster, readOnly: true}
+            - {name: execution-identities, mountPath: /secrets/execution, readOnly: true}
+      volumes: &coreVolumes
+        - {name: state, emptyDir: {}}
+        - {name: objects, emptyDir: {}}
+        - {name: runtime, configMap: {name: highwater-runtime}}
+        - {name: api-token, secret: {secretName: highwater-api-token}}
+        - {name: cluster-token, secret: {secretName: highwater-cluster-token}}
+        - {name: execution-identities, secret: {secretName: highwater-execution-identities}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: highwater-core-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: highwater-core, node: b}
+  template:
+    metadata:
+      labels: {app: highwater-core, node: b}
+    spec:
+      serviceAccountName: highwater-core
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: highwater-core}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: core
+          image: ghcr.io/henneberger/highwater-server:IMAGE_TAG
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              exec highwater-server --listen 0.0.0.0:7233
+              --execution-listen 0.0.0.0:7234
+              --state-dir /var/lib/highwater/state
+              --object-store-dir /var/lib/highwater/objects
+              --journal "$(cat /config/journal-uri)"
+              --node-id core-b
+              --advertise-endpoint http://highwater-core-b:7234
+              --data-plane-only
+              --process-partitions 2,4
+              --log-shards 5
+              --api-token-file /secrets/api/token
+              --cluster-token-file /secrets/cluster/token
+              --execution-identity-file /secrets/execution/identities.json
+          ports:
+            - {name: public, containerPort: 7233}
+            - {name: execution, containerPort: 7234}
+          readinessProbe:
+            httpGet: {path: /health, port: public}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: public}
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/highwater/state}
+            - {name: objects, mountPath: /var/lib/highwater/objects}
+            - {name: runtime, mountPath: /config, readOnly: true}
+            - {name: api-token, mountPath: /secrets/api, readOnly: true}
+            - {name: cluster-token, mountPath: /secrets/cluster, readOnly: true}
+            - {name: execution-identities, mountPath: /secrets/execution, readOnly: true}
+      volumes:
+        - {name: state, emptyDir: {}}
+        - {name: objects, emptyDir: {}}
+        - {name: runtime, configMap: {name: highwater-runtime}}
+        - {name: api-token, secret: {secretName: highwater-api-token}}
+        - {name: cluster-token, secret: {secretName: highwater-cluster-token}}
+        - {name: execution-identities, secret: {secretName: highwater-execution-identities}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: highwater-core-a}
+spec:
+  selector: {app: highwater-core, node: a}
+  ports:
+    - {name: public, port: 7233, targetPort: public}
+    - {name: execution, port: 7234, targetPort: execution}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: highwater-core-b}
+spec:
+  selector: {app: highwater-core, node: b}
+  ports:
+    - {name: execution, port: 7234, targetPort: execution}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: highwater-public}
+spec:
+  selector: {app: highwater-core, node: a}
+  ports:
+    - {name: public, port: 7233, targetPort: public}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: highwater-execution}
+spec:
+  selector: {app: highwater-core}
+  ports:
+    - {name: execution, port: 7234, targetPort: execution}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: highwater-core}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: highwater-core}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: highwater-application-worker-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: highwater-application-worker, owner: a}
+  template:
+    metadata:
+      labels: {app: highwater-application-worker, owner: a}
+    spec:
+      runtimeClassName: gvisor
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: application
+          image: APPLICATION_IMAGE
+          args: ["app", "--process-only", "--task-queue", "APPLICATION_TASK_QUEUE", "--target", "http://highwater-core-a:7234", "--process-partitions", "1,3"]
+          env:
+            - name: HIGHWATER_EXECUTION_TOKEN
+              valueFrom:
+                secretKeyRef: {name: highwater-worker-identity, key: token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: temporary, mountPath: /tmp}
+      volumes:
+        - name: temporary
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: highwater-application-worker-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: highwater-application-worker, owner: b}
+  template:
+    metadata:
+      labels: {app: highwater-application-worker, owner: b}
+    spec:
+      runtimeClassName: gvisor
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: application
+          image: APPLICATION_IMAGE
+          args: ["app", "--process-only", "--task-queue", "APPLICATION_TASK_QUEUE", "--target", "http://highwater-core-b:7234", "--process-partitions", "2,4"]
+          env:
+            - name: HIGHWATER_EXECUTION_TOKEN
+              valueFrom:
+                secretKeyRef: {name: highwater-worker-identity, key: token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: temporary, mountPath: /tmp}
+      volumes:
+        - name: temporary
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: highwater-autoscaler}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: highwater-autoscaler}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: ["highwater-application-worker-a", "highwater-application-worker-b"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: highwater-autoscaler}
+subjects:
+  - {kind: ServiceAccount, name: highwater-autoscaler}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: highwater-autoscaler}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: highwater-autoscaler}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: highwater-autoscaler}
+  template:
+    metadata:
+      labels: {app: highwater-autoscaler}
+    spec:
+      serviceAccountName: highwater-autoscaler
+      containers:
+        - name: autoscaler
+          image: APPLICATION_IMAGE
+          command: ["highwater-autoscaler"]
+          args:
+            - --process
+            - APPLICATION_PROCESS
+            - --target
+            - http://highwater-public:7233
+            - --partitions
+            - "2"
+            - --min-replicas
+            - "1"
+            - --max-replicas
+            - "2"
+            - --watch
+            - --kubernetes-deployment
+            - highwater-application-worker-a
+          env:
+            - name: HIGHWATER_API_KEY
+              valueFrom:
+                secretKeyRef: {name: highwater-api-token, key: token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: highwater-autoscaler-b}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: highwater-autoscaler-b}
+  template:
+    metadata:
+      labels: {app: highwater-autoscaler-b}
+    spec:
+      serviceAccountName: highwater-autoscaler
+      containers:
+        - name: autoscaler
+          image: APPLICATION_IMAGE
+          command: ["highwater-autoscaler"]
+          args:
+            - --process
+            - APPLICATION_PROCESS
+            - --target
+            - http://highwater-public:7233
+            - --partitions
+            - "2"
+            - --min-replicas
+            - "1"
+            - --max-replicas
+            - "2"
+            - --watch
+            - --kubernetes-deployment
+            - highwater-application-worker-b
+          env:
+            - name: HIGHWATER_API_KEY
+              valueFrom:
+                secretKeyRef: {name: highwater-api-token, key: token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: highwater-application-worker}
+spec:
+  podSelector:
+    matchLabels: {app: highwater-application-worker}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels: {app: highwater-core}
+      ports:
+        - {protocol: TCP, port: 7234}

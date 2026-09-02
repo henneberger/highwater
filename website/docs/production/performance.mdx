@@ -19,20 +19,21 @@ Measure accepted events, committed transitions, output delivery, p50/p99 end-to-
 
 One key remains serial when transitions do not commute. More capacity helps independent keys, not a single globally ordered state machine.
 
-## Durable throughput test
+## Representative durable throughput test
 
-The release benchmark submits 100,000 unique keyed events across ten Process partitions and ten execution instances. Admission and completion are acknowledged after their authoritative append.
+The release benchmark submits 100,000 product views across 20,000 shopping sessions and 10,000 products. Each transition updates bounded session state, calculates a recommendation score, and periodically emits durable output. Admission and completion are acknowledged after their authoritative append.
 
 ```bash
 PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
   --events 100000 \
-  --runs 3 \
-  --partitions 10 \
-  --execution-instances 10 \
-  --handler batch \
+  --active-keys 20000 \
+  --runs 1 \
+  --partitions 20 \
+  --execution-instances 20 \
+  --workload shopping \
   --minimum-throughput 50000
 ```
 
-The September 1, 2026 development-machine run completed 61,238 to 116,900 events per second, with a median of 110,696. The release workflow runs the same durable path with a 50,000 completed-events-per-second floor on Linux.
+The September 1, 2026 development-machine run completed 53,638 events per second with host workers. Hardened container workers completed 30,608 events per second. A minimal counter workload reached 65,974 events per second through the same container boundary.
 
-This test measures the engine and a minimal keyed handler. Model calls, network services, state size, key skew, and storage latency shape application throughput and need workload-specific measurement.
+The shopping workload performs local deterministic ranking. Model calls, network services, state size, key skew, object-store latency, and the production sandbox runtime need workload-specific measurement.

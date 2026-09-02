@@ -195,22 +195,22 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
       <section class="section operations-section" id="operations" data-section="03 / operations">
         <div class="shell">
           <div class="section-heading split-heading operations-heading">
-            <div><p class="kicker">Application operations</p><h2>Find what is blocking event processing.</h2></div>
-            <p>Inspect live state, quarantine a poison event, replay from a checkpoint, and follow each decision into its committed output.</p>
+            <div><p class="kicker">Application operations</p><h2>See backlog, progress, and worker ownership.</h2></div>
+            <p>Follow accepted work through execution while the worker pool changes around it.</p>
           </div>
           <div class="operations-console" aria-label="Application operations dashboard">
             <div class="operations-console-head"><span>support-agent / production</span><span><i></i> scaling</span></div>
             <div class="operations-dashboard">
-              <div class="latency-panel"><div class="panel-title"><div><span>Backlog age during 4× burst</span><strong>Worker scale-out: 48 → 192 in 71 seconds</strong></div><div class="chart-key" aria-hidden="true"><span><i></i> p99</span><span><i></i> p50</span></div></div><svg viewBox="0 0 760 270" role="img" aria-label="Backlog age rises during a traffic burst and returns to normal as workers scale out"><g class="operations-grid" aria-hidden="true"><path d="M46 32H730M46 92H730M46 152H730M46 212H730"/><path d="M46 32V212M217 32V212M388 32V212M559 32V212M730 32V212"/></g><path class="p99-area" d="M46 186 C118 182 151 175 213 178 C272 180 304 64 369 59 C428 55 451 81 503 105 C558 130 594 151 647 163 C681 171 706 176 730 178 L730 212 L46 212 Z"/><path class="p99-line" d="M46 186 C118 182 151 175 213 178 C272 180 304 64 369 59 C428 55 451 81 503 105 C558 130 594 151 647 163 C681 171 706 176 730 178"/><path class="p50-line" d="M46 199 C161 198 233 195 302 188 C372 176 428 169 493 181 C564 192 637 196 730 197"/></svg><div class="operations-axis" aria-hidden="true"><span>burst</span><span>workers requested</span><span>capacity joined</span><span>backlog cleared</span></div></div>
-              <div class="operations-readout"><article><span>Peak backlog age</span><strong>2.4 s</strong><small>p99 during scale-out</small></article><article><span>Ordering breaches</span><strong>0</strong><small>2 million active keys</small></article><article><span>Watermark lag</span><strong>1.8 s</strong><small>active sources</small></article><article><span>Commit latency</span><strong>46 ms</strong><small>p99 after scale-out</small></article></div>
+              <div class="latency-panel"><div class="panel-title"><div><span>Backlog during live ingestion</span><strong>Capacity follows queued work</strong></div><div class="chart-key" aria-hidden="true"><span><i></i> backlog</span><span><i></i> capacity</span></div></div><svg viewBox="0 0 760 270" role="img" aria-label="Backlog rises during a traffic burst and returns to normal as workers join"><g class="operations-grid" aria-hidden="true"><path d="M46 32H730M46 92H730M46 152H730M46 212H730"/><path d="M46 32V212M217 32V212M388 32V212M559 32V212M730 32V212"/></g><path class="p99-area" d="M46 186 C118 182 151 175 213 178 C272 180 304 64 369 59 C428 55 451 81 503 105 C558 130 594 151 647 163 C681 171 706 176 730 178 L730 212 L46 212 Z"/><path class="p99-line" d="M46 186 C118 182 151 175 213 178 C272 180 304 64 369 59 C428 55 451 81 503 105 C558 130 594 151 647 163 C681 171 706 176 730 178"/><path class="p50-line" d="M46 199 H217 V174 H388 V112 H559 V164 H730"/></svg><div class="operations-axis" aria-hidden="true"><span>ingest</span><span>backlog sampled</span><span>workers joined</span><span>work reconciled</span></div></div>
+              <div class="operations-readout"><article><span>Starting capacity</span><strong>1 worker</strong><small>four partitions</small></article><article><span>Scale decision</span><strong>4 workers</strong><small>from live backlog</small></article><article><span>Worker loss</span><strong>Replaced</strong><small>lease reassigned</small></article><article><span>Final state</span><strong>Reconciled</strong><small>all tested keys</small></article></div>
             </div>
             <div class="progress-inspector"><div><span>Source progress</span><strong>Complete through 14:32:18</strong></div><div class="partition-status" aria-label="Progress for four input partitions"><span><i></i> input-01</span><span><i></i> input-02</span><span class="partition-lag"><i></i> input-03</span><span><i></i> input-04</span></div><p><b>input-03</b> is holding the event-time frontier.</p></div>
           </div>
           <div class="operator-controls">
-            <article><span>Poison event</span><strong>Quarantine one event or key</strong><p>Keep unrelated keys moving while an operator inspects the failure.</p></article>
-            <article><span>State repair</span><strong>Inspect and patch with an audit record</strong><p>Every change records the actor, reason, prior value, and resulting checkpoint.</p></article>
-            <article><span>Replay</span><strong>Resume from a selected checkpoint</strong><p>Choose whether replayed work suppresses, compares, or emits outputs.</p></article>
-            <article><span>Cross-region recovery</span><strong>Up to 30-second RPO · 90-second RTO target</strong><p>Worker and availability-zone failures retain acknowledged events. A regional failover can lose work inside the replication window.</p></article>
+            <article><span>Autoscaling</span><strong>Scale from workload pressure</strong><p>The controller turns backlog and utilization samples into bounded replica decisions.</p></article>
+            <article><span>Ownership</span><strong>Fence stale workers</strong><p>Partition leases keep an old worker from committing after reassignment.</p></article>
+            <article><span>Commit</span><strong>Keep state and output together</strong><p>Completion records the new state, timers, and emitted output at one boundary.</p></article>
+            <article><span>Recovery</span><strong>Restore state, then replay the tail</strong><p>A replacement owner loads the checkpoint and applies later journal entries.</p></article>
           </div>
         </div>
       </section>
@@ -222,9 +222,9 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
             <p>Keyed throughput, worker reassignment, state migration, and owner-crash recovery.</p>
           </div>
           <div class="proof-grid">
-            <article><strong>100k+</strong><span>median durable transitions/s on a development machine</span></article>
-            <article><strong>50k</strong><span>completed events/s required by the release gate</span></article>
-            <article><strong>2 → 4</strong><span>workers with every keyed state reconciled after scale-out</span></article>
+            <article><strong>50k+</strong><span>shopping events/s with durable state on a development machine</span></article>
+            <article><strong>30k+</strong><span>shopping events/s through hardened container workers</span></article>
+            <article><strong>1 → 4</strong><span>workers while ingestion continued and one worker was replaced</span></article>
             <article><strong>Recovered</strong><span>checkpoint and journal tail after an S3 owner crash</span></article>
           </div>
           <div class="checkpoint-proof" aria-label="Tiered storage checkpoint benchmark">
@@ -238,10 +238,10 @@ catalog = streaming.<span class="code-call">versioned</span>(<span class="code-g
               <article><strong>No full copy</strong><span>required during scale-out</span></article>
             </div>
           </div>
-          <div class="soak-proof"><span>Continuous soak</span><strong>Sustained traffic</strong><i></i><strong>Repeated worker loss</strong><i></i><strong>Rolling stateful upgrades</strong><i></i><strong>Reconciliation after every fault</strong></div>
-          <div class="ai-proof"><span>Inference scheduler test</span><strong>Model-aware request grouping</strong><i></i><strong>Concurrent agent sessions</strong><i></i><strong>Batch-size dispatch</strong><i></i><strong>Latency-budget dispatch</strong><i></i><strong>Scheduler overhead measured separately</strong></div>
+          <div class="soak-proof"><span>Failure suite</span><strong>Owner termination</strong><i></i><strong>Lease expiry</strong><i></i><strong>Checkpoint restore</strong><i></i><strong>State reconciliation</strong></div>
+          <div class="ai-proof"><span>Representative workload</span><strong>Shopping sessions</strong><i></i><strong>10,000 products</strong><i></i><strong>Durable recommendations</strong><i></i><strong>Repeated keys</strong></div>
           <div class="sandbox-proof"><span>Worker sandbox test</span><strong>Non-root UID</strong><strong>Read-only root</strong><strong>No network or capabilities</strong><strong>Bounded compute and processes</strong></div>
-          <details class="proof-method"><summary>Test method and boundaries</summary><div><p>The durable throughput test sends 100,000 unique keyed events through ten Process partitions and ten execution instances. Three runs completed between 61,238 and 116,900 events per second after authoritative admission and completion appends.</p><p>The scale test processes 200 keys with two workers, stops them, redistributes the partitions across four workers, and checks every key after another event. Each final state contains both ordered transitions.</p><p>The S3 chaos test terminates a partition owner after a checkpoint, starts a replacement owner, and verifies checkpoint restoration, journal-tail replay, and fencing of stale work.</p><p>The sandbox test runs the packaged application worker as UID 65532 with a read-only root filesystem, disabled network, dropped capabilities, and bounded CPU, memory, and process count.</p></div></details>
+          <details class="proof-method"><summary>Test method and boundaries</summary><div><p>The representative benchmark sends 100,000 product views across 20,000 shopping sessions and 10,000 products. Each event updates durable session state, performs deterministic ranking work, and periodically emits a recommendation. Twenty host workers completed 53,638 events per second in the measured run. Hardened container workers completed 30,608 events per second on the same machine.</p><p>The live scale test starts one worker over four partitions, publishes while the controller samples backlog, scales to four workers, terminates one, starts its replacement, and reconciles 4,000 transitions across 2,000 keys.</p><p>The S3 chaos test terminates a partition owner after a checkpoint, starts a replacement owner, and verifies checkpoint restoration, journal-tail replay, and fencing of stale work.</p><p>The sandbox benchmark runs packaged workers as UID 65532 with a read-only root filesystem, dropped capabilities, a no-new-privileges policy, and bounded CPU, memory, and process count. The simpler counter workload exceeds 65,000 completed events per second through that boundary.</p></div></details>
         </div>
       </section>
 

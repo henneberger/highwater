@@ -205,6 +205,17 @@ highwater-autoscaler \
 
 The command produces a controller input. Kubernetes, Highwater Cloud, or another scheduler applies the replica count and starts workers with the returned partition assignment.
 
+In Kubernetes, the controller can watch the Process and update a worker Deployment directly:
+
+```bash
+highwater-autoscaler \
+  --process shopping-assistant \
+  --target "$HIGHWATER_ADDRESS" \
+  --partitions 64 \
+  --watch \
+  --kubernetes-deployment shopping-assistant-workers
+```
+
 ## Compare an application build
 
 Retained Process input can be replayed through two decorated Process classes before activation. The comparison reports every state or output difference and writes neither result to the running deployment.
@@ -226,7 +237,7 @@ Versioned stream reads resolve from retained history at the original event time.
 
 The public API and private execution API can listen on separate network interfaces. Execution tokens are scoped to a task queue and an allowlist of build IDs. A worker cannot use its execution identity to reach the public data API.
 
-[`deploy/sandbox/worker.yaml`](deploy/sandbox/worker.yaml) provides the reference Kubernetes boundary. It uses gVisor, a non-root user, a read-only root filesystem, no Linux capabilities, a seccomp profile, bounded processes and compute, disabled service-account credentials, and default-deny ingress and egress. Grant outbound destinations through an explicit network policy.
+[`deploy/sandbox/worker.yaml`](deploy/sandbox/worker.yaml) provides the worker boundary. [`deploy/kubernetes/hosted.yaml`](deploy/kubernetes/hosted.yaml) composes sharded core services, conditional object storage, private execution endpoints, sandboxed workers, autoscalers, disruption budgets, and network policy. The worker profile uses gVisor, a non-root user, a read-only root filesystem, no Linux capabilities, a seccomp profile, bounded processes and compute, disabled service-account credentials, and default-deny ingress and egress.
 
 ## Delivery guarantees
 
@@ -244,7 +255,7 @@ Direct, non-idempotent external side effects can still occur more than once when
 
 ## Performance
 
-The partition execution path completes 100,000 distinct durable keyed transitions at a median **99,951 events per second** with five execution instances on one development machine. The ordinary per-event handler reaches a median **89,029 events per second**. Every admission and completion is acknowledged only after its authoritative WAL append.
+The representative benchmark sends 100,000 product views across 20,000 shopping sessions and 10,000 products. It updates bounded durable session state, performs ranking work, and emits a recommendation every fifth view. A measured development-machine run completed **53,638 events per second** with 20 execution instances. Hardened container workers reached **30,608 events per second** on the same machine. The minimal counter workload reached **65,974 events per second** through the container boundary. Every admission and completion is acknowledged only after its authoritative WAL append.
 
 Execution instances and partition state-machine owners can run on separate hosts. Clustered deployments linearize each partition through a conditionally updated object-store head, route ingestion to its current owner, and move ownership through a checkpoint-plus-tail handoff. Durable owner epochs and activation sequences fence delayed work throughout restart or reassignment. See [Scaling architecture](docs/SCALING.md).
 

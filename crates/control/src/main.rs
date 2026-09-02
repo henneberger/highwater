@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
             .timeout(Duration::from_secs(3))
             .build()?,
         data_plane: env::var("HIGHWATER_DATA_PLANE")
-            .unwrap_or_else(|_| "https://highwater-cloud.fly.dev".into())
+            .context("HIGHWATER_DATA_PLANE is required")?
             .trim_end_matches('/')
             .to_owned(),
         username: env::var("HIGHWATER_CONSOLE_USERNAME").unwrap_or_else(|_| "demo".into()),

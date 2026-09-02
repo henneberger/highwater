@@ -218,7 +218,7 @@ fn durability_summary(app: &AppState) -> Result<Value> {
         "key_groups": key_groups.len(),
         "active_key_groups": active_key_groups,
         "node_id": app.node_id,
-        "region": env::var("FLY_REGION").unwrap_or_else(|_| "local".to_owned()),
+        "region": env::var("HIGHWATER_REGION").unwrap_or_else(|_| "local".to_owned()),
     }))
 }
 

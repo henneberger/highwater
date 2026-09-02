@@ -39,23 +39,34 @@ jobs:
       - name: Validate documentation and deployment manifests
         run: |
           (cd website && yarn install --frozen-lockfile && yarn build)
-          kubectl apply --dry-run=client --validate=false -f deploy/kubernetes/hosted.yaml -o name
+          (cd console && npm ci && npm run build && npm run lint)
+          digest="$(printf '0%.0s' {1..64})"
+          python deploy/kubernetes/render.py \
+            --server-image "ghcr.io/highwater/server@sha256:$digest" \
+            --application-image "ghcr.io/acme/shopping@sha256:$digest" \
+            --application-module shopping_app \
+            --process shopping-assistant \
+            --task-queue shopping-production \
+            --journal s3://highwater-production/journal \
+            --output /tmp/highwater-hosted.yaml
+          kubectl apply --dry-run=client --validate=false -f /tmp/highwater-hosted.yaml -o name
       - name: Build sandboxed worker
         run: docker build -f Dockerfile.worker -t highwater-worker:release-test .
       - name: Validate representative durable throughput
         run: |
           PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
-            --events 100000 --active-keys 20000 --runs 1 \
-            --partitions 20 --execution-instances 20 \
+            --events 100000 --active-keys 20000 --runs 3 \
+            --partitions 20 --execution-instances 8 \
+            --worker-startup-delay 1 \
             --workload shopping --minimum-throughput 50000
       - name: Validate sandboxed worker throughput
         run: |
           PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
             --events 100000 --active-keys 20000 --runs 1 \
-            --partitions 20 --execution-instances 20 \
+            --partitions 20 --execution-instances 10 \
             --workload shopping --worker-runtime docker \
             --worker-image highwater-worker:release-test \
-            --worker-startup-delay 2 --minimum-throughput 25000
+            --worker-startup-delay 2 --minimum-throughput 40000
       - name: Validate sandboxed engine ceiling
         run: |
           PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \

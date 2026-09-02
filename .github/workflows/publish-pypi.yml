@@ -86,8 +86,9 @@ jobs:
         shell: bash
         run: |
           PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
-            --events 100000 --active-keys 20000 --runs 1 --partitions 20 \
-            --execution-instances 20 --handler batch --workload shopping \
+            --events 100000 --active-keys 20000 --runs 3 --partitions 20 \
+            --execution-instances 8 --worker-startup-delay 1 \
+            --handler batch --workload shopping \
             --minimum-throughput 50000
       - uses: actions/upload-artifact@v4
         with:

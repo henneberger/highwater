@@ -21,7 +21,7 @@ The partition-runtime and remote-ownership increments are complete:
 - checkpoint-plus-tail handoff drains, fences, restores, and activates a partition at a higher epoch;
 - application workers run as warm, deployment-scoped sandbox pools without storage credentials.
 
-Automatic placement, content-addressed incremental partition checkpoints, streaming RPC transport, and end-to-end credit propagation remain. Manual placement and movement are the current correctness boundary; adding a balancer must not weaken it.
+Automatic placement, streaming RPC transport, and end-to-end credit propagation remain. Checkpoint files are content-addressed and reused across snapshots. Manual placement and movement are the current correctness boundary; adding a balancer must not weaken it.
 
 ## Invariants
 
@@ -255,7 +255,7 @@ Track admission throughput, committed-transition throughput, group-commit size, 
 ## Recommended implementation order
 
 1. Fault-inject the conditional journal and manual movement protocol.
-2. Make checkpoint files content-addressed and partition-local.
+2. Split content-addressed checkpoint manifests by partition.
 3. Extend fenced ownership from Process partitions to every keyed operator mutation.
 4. Move cluster and invocation traffic to streaming RPC.
 5. Propagate credits across remote edges and ingestion.

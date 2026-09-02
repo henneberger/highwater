@@ -23,6 +23,18 @@ class Response:
 
 class KubernetesAutoscalerTest(unittest.TestCase):
     @patch("highwater.kubernetes.urlopen")
+    def test_scales_deployment_to_zero(self, request):
+        request.return_value = Response({
+            "metadata": {"resourceVersion": "19"},
+            "spec": {"replicas": 0},
+        })
+        client = KubernetesScaleClient("https://kubernetes", "applications", "token")
+        updated = client.set("shopping-worker", 0, "18")
+        self.assertEqual(updated.replicas, 0)
+        body = json.loads(request.call_args.args[0].data)
+        self.assertEqual(body["spec"]["replicas"], 0)
+
+    @patch("highwater.kubernetes.urlopen")
     def test_reads_and_conditionally_updates_deployment_scale(self, request):
         request.side_effect = [
             Response({"metadata": {"resourceVersion": "17"}, "spec": {"replicas": 2}}),

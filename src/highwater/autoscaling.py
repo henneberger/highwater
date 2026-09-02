@@ -20,7 +20,7 @@ class WorkloadSample:
 
 @dataclass(frozen=True)
 class AutoscalingPolicy:
-    min_replicas: int = 1
+    min_replicas: int = 0
     max_replicas: int = 64
     target_events_per_second_per_replica: float = 5_000
     target_backlog_per_replica: int = 5_000
@@ -28,7 +28,7 @@ class AutoscalingPolicy:
     scale_down_after: float = 300
 
     def __post_init__(self) -> None:
-        if not 1 <= self.min_replicas <= self.max_replicas:
+        if not 0 <= self.min_replicas <= self.max_replicas:
             raise ValueError("replica bounds are invalid")
         if self.target_events_per_second_per_replica <= 0:
             raise ValueError("target throughput must be positive")
@@ -51,8 +51,10 @@ class ScalingDecision:
 
 
 def assign_partitions(partitions: int, replicas: int) -> tuple[tuple[int, ...], ...]:
-    if partitions <= 0 or replicas <= 0:
-        raise ValueError("partitions and replicas must be positive")
+    if partitions <= 0 or replicas < 0:
+        raise ValueError("partitions must be positive and replicas must be non-negative")
+    if replicas == 0:
+        return ()
     active = min(partitions, replicas)
     assignments = [[] for _ in range(active)]
     for index, partition in enumerate(range(1, partitions + 1)):
@@ -70,8 +72,8 @@ def recommend_replicas(
     seconds_below_target: float = 0,
 ) -> ScalingDecision:
     selected = policy or AutoscalingPolicy()
-    if current_replicas <= 0:
-        raise ValueError("current replicas must be positive")
+    if current_replicas < 0:
+        raise ValueError("current replicas must be non-negative")
     elapsed = current.observed_at - previous.observed_at
     if elapsed <= 0:
         raise ValueError("samples must advance in time")

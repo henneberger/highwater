@@ -71,8 +71,8 @@ class KubernetesScaleClient:
         )
 
     def set(self, deployment: str, replicas: int, resource_version: str) -> DeploymentScale:
-        if replicas <= 0:
-            raise ValueError("deployment replicas must be positive")
+        if replicas < 0:
+            raise ValueError("deployment replicas must be non-negative")
         value = self._request(
             "PUT",
             f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{deployment}/scale",

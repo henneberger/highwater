@@ -326,7 +326,7 @@ spec:
             - --partitions
             - "2"
             - --min-replicas
-            - "1"
+            - "0"
             - --max-replicas
             - "2"
             - --watch
@@ -368,7 +368,7 @@ spec:
             - --partitions
             - "2"
             - --min-replicas
-            - "1"
+            - "0"
             - --max-replicas
             - "2"
             - --watch

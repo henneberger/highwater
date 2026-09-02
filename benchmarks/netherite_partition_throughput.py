@@ -229,7 +229,7 @@ def main() -> None:
     parser.add_argument("--max-concurrency", type=int, default=100_000)
     parser.add_argument("--handler", choices=("batch", "event"), default="batch")
     parser.add_argument("--workload", choices=("counter", "shopping"), default="shopping")
-    parser.add_argument("--active-keys", type=int, default=90_000)
+    parser.add_argument("--active-keys", type=int, default=20_000)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--minimum-throughput", type=float, default=0)

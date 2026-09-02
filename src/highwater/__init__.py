@@ -1,3 +1,8 @@
+import sys
+
+if sys.version_info < (3, 11):
+    raise RuntimeError("Highwater requires Python 3.11 or newer")
+
 from .annotations import workflow
 from .activity_context import current_activity, heartbeat
 from .errors import (

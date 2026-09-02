@@ -70,13 +70,12 @@ await balances.send(
 )
 ```
 
-Or send JSON to the generated event endpoint:
+Or send JSON to the Process endpoint:
 
 ```bash
-curl -X POST http://localhost:7233/v1/processes/Balance/events \
+curl -X POST http://localhost:7233/processes/Balance/events \
   -H 'content-type: application/json' \
-  -H 'idempotency-key: deposit-1001' \
-  -d '{"account_id":"account-a","amount":5}'
+  -d '{"records":[{"key":"account-a","event_time":1,"event_id":"deposit-1001","kind":"upsert","value":{"account_id":"account-a","amount":5}}]}'
 ```
 
 ## Execute remotely
@@ -169,7 +168,7 @@ class ShoppingAssistant:
 
 Every deployment receives managed HTTPS and SDK ingestion. Highwater assigns durable source positions, validates idempotency keys, partitions by Process key, and applies admission backpressure.
 
-Customers publish events to Highwater. Connectors, brokers, storage tiers, and partition movement are platform concerns rather than application configuration.
+Customers publish events to Highwater. Durable admission, storage tiers, and partition movement stay outside application code.
 
 The Wikimedia example consumes the public recent-change feed in microbatches and maintains durable per-page activity state:
 
@@ -182,8 +181,6 @@ Its upstream `Last-Event-ID` is committed atomically with each Highwater batch. 
 ## Execution model
 
 Highwater groups keyed Processes into movable partitions. Each partition pipelines and group-commits state transitions, keeps hot state close to execution, and snapshots durable progress asynchronously. Execution containers are cached according to observed traffic and can scale to zero when idle.
-
-Cross-partition messages carry causal commit dependencies. A receiver can begin speculative work, but it cannot commit a result before the sender's dependency is durable. This avoids a distributed transaction on every message while preserving recovery order.
 
 Leases control where an invocation may run. A lease token is a renewable capability tied to a durable partition generation. Expiration only makes a lease eligible for revocation; a durable generation change fences the old executor. Late completions from a prior generation cannot commit.
 
@@ -255,7 +252,7 @@ Direct, non-idempotent external side effects can still occur more than once when
 
 ## Performance
 
-The representative benchmark sends 100,000 product views across 20,000 shopping sessions and 10,000 products. It updates bounded durable session state, performs ranking work, and emits a recommendation every fifth view. A measured development-machine run completed **53,638 events per second** with 20 execution instances. Hardened container workers reached **30,608 events per second** on the same machine. The minimal counter workload reached **65,974 events per second** through the container boundary. Every admission and completion is acknowledged only after its authoritative WAL append.
+The representative benchmark sends 100,000 product views across 20,000 shopping sessions and 10,000 products. It updates bounded durable session state, performs ranking work, and emits a recommendation every fifth view. Three development-machine runs with 8 execution instances completed a median **54,452 events per second**. Ten hardened container workers reached **45,782 events per second** on the same machine. The minimal counter workload reached **65,974 events per second** through the container boundary. Every admission and completion is acknowledged only after its authoritative WAL append.
 
 Execution instances and partition state-machine owners can run on separate hosts. Clustered deployments linearize each partition through a conditionally updated object-store head, route ingestion to its current owner, and move ownership through a checkpoint-plus-tail handoff. Durable owner epochs and activation sequences fence delayed work throughout restart or reassignment. See [Scaling architecture](docs/SCALING.md).
 

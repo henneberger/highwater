@@ -38,4 +38,6 @@ A coordinator checkpoint first creates a prepared local state handle at an exact
 
 ## Current boundary
 
-The remaining distribution work is remote shard execution of the barrier protocol, credit-based backpressure across edges, unaligned and incremental checkpoints, rescaling transfer, and a general multi-input operator scheduler.
+Remote checkpoints store files by SHA-256 digest. A new checkpoint uploads changed content, then conditionally advances its pointer. Restore verifies every file before opening the local RocksDB cache.
+
+The remaining distribution work is credit-based backpressure across edges, unaligned checkpoints, rescaling transfer, and a general multi-input operator scheduler.

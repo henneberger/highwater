@@ -85,7 +85,7 @@ def main() -> None:
     parser.add_argument("--api-key")
     parser.add_argument("--current-replicas", type=int)
     parser.add_argument("--partitions", type=int, required=True)
-    parser.add_argument("--min-replicas", type=int, default=1)
+    parser.add_argument("--min-replicas", type=int, default=0)
     parser.add_argument("--max-replicas", type=int, default=64)
     parser.add_argument("--target-events-per-second", type=float, default=5_000)
     parser.add_argument("--target-backlog", type=int, default=5_000)

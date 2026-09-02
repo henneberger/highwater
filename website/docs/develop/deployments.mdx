@@ -9,6 +9,20 @@ Highwater separates durable ownership from application execution. Deploy the Pyt
 highwater-worker app --target "$HIGHWATER_EXECUTION_ADDRESS"
 ```
 
+Build an immutable application image from the published worker base:
+
+```dockerfile
+FROM ghcr.io/henneberger/highwater-worker@sha256:WORKER_IMAGE_DIGEST
+WORKDIR /app
+USER root
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --requirement /app/requirements.txt
+COPY app.py /app/app.py
+USER 65532:65532
+```
+
+Push that image, resolve its platform-index digest, and pass the digest to the hosted deployment renderer. The worker base contains the SDK, native engine utilities, and worker entry point. Your image supplies the application module and its dependencies.
+
 Clients and operators use the public endpoint:
 
 ```bash

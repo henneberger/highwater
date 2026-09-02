@@ -77,7 +77,7 @@ class LandingContractTest(unittest.TestCase):
         self.assertIn("Book a technical review", html)
         self.assertIn('data-config-link="earlyAccess"', html)
         self.assertIn("10,000 products", html)
-        self.assertIn("53,638 events per second", html)
+        self.assertIn("54,452 events per second", html)
 
 
 if __name__ == "__main__":

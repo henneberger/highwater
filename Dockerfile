@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1.92-bookworm AS engine
+FROM rust:1.92-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS engine
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends clang cmake libclang-dev liblz4-dev pkg-config \
@@ -14,7 +14,10 @@ RUN --mount=type=cache,id=highwater-cargo-registry,target=/usr/local/cargo/regis
     cargo build --release --locked --package highwater-server \
     && install -Dm755 target/release/highwater-server /out/highwater-server
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254
+
+LABEL org.opencontainers.image.source="https://github.com/henneberger/highwater" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -32,5 +35,7 @@ COPY --from=engine /out/highwater-server /usr/local/bin/highwater-server
 
 USER 65532:65532
 EXPOSE 7233 7234
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["python", "-c", "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:7233/health', timeout=2).status == 200"]
 ENTRYPOINT ["highwater-server"]
 CMD ["--listen", "0.0.0.0:7233", "--state-dir", "/var/lib/highwater/state", "--object-store-dir", "/var/lib/highwater/objects"]

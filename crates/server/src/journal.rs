@@ -4,6 +4,7 @@ use object_store::{
     aws::{AmazonS3Builder, S3ConditionalPut},
     path::Path as ObjectPath,
 };
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
@@ -64,7 +65,18 @@ enum JournalCommand {
 struct RemoteCheckpoint {
     format: u32,
     manifest: CheckpointManifest,
-    files: Vec<String>,
+    files: Vec<CheckpointFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CheckpointFile {
+    path: String,
+    digest: String,
+    size: u64,
+}
+
+fn content_digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 pub(crate) struct RemoteJournal {
@@ -356,8 +368,8 @@ impl ConditionalJournal {
             fs::remove_dir_all(destination)?;
         }
         fs::create_dir_all(destination)?;
-        for relative in &checkpoint.files {
-            let relative_path = FsPath::new(relative);
+        for checkpoint_file in &checkpoint.files {
+            let relative_path = FsPath::new(&checkpoint_file.path);
             if relative_path.is_absolute()
                 || relative_path
                     .components()
@@ -365,11 +377,24 @@ impl ConditionalJournal {
             {
                 bail!("remote checkpoint contains an unsafe file path");
             }
-            let object = self.path(&format!(
-                "checkpoints/{}/files/{relative}",
-                checkpoint.manifest.checkpoint_id
-            ));
+            if checkpoint_file.digest.len() != 64
+                || !checkpoint_file
+                    .digest
+                    .bytes()
+                    .all(|value| value.is_ascii_hexdigit())
+            {
+                bail!("remote checkpoint contains an invalid content digest");
+            }
+            let object = self.path(&format!("checkpoints/objects/{}", checkpoint_file.digest));
             let bytes = self.store.get(&object).await?.bytes().await?;
+            if bytes.len() as u64 != checkpoint_file.size
+                || content_digest(&bytes) != checkpoint_file.digest
+            {
+                bail!(
+                    "remote checkpoint content is corrupt: {}",
+                    checkpoint_file.path
+                );
+            }
             let path = destination.join(relative_path);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -413,20 +438,27 @@ impl ConditionalJournal {
                     .to_str()
                     .ok_or_else(|| anyhow!("checkpoint path is not UTF-8"))?
                     .replace('\\', "/");
-                self.store
+                let bytes = fs::read(entry.path())?;
+                let digest = content_digest(&bytes);
+                let result = self
+                    .store
                     .put_opts(
-                        &self.path(&format!(
-                            "checkpoints/{}/files/{relative}",
-                            manifest.checkpoint_id
-                        )),
-                        fs::read(entry.path())?.into(),
+                        &self.path(&format!("checkpoints/objects/{digest}")),
+                        bytes.clone().into(),
                         PutOptions::from(PutMode::Create),
                     )
-                    .await?;
-                files.push(relative);
+                    .await;
+                if !matches!(&result, Ok(_) | Err(ObjectStoreError::AlreadyExists { .. })) {
+                    result?;
+                }
+                files.push(CheckpointFile {
+                    path: relative,
+                    digest,
+                    size: bytes.len() as u64,
+                });
             }
         }
-        files.sort();
+        files.sort_by(|left, right| left.path.cmp(&right.path));
         let checkpoint = RemoteCheckpoint {
             format: JOURNAL_FORMAT,
             manifest: manifest.clone(),
@@ -767,6 +799,84 @@ mod tests {
         older.checkpoint_id = "checkpoint-1".to_owned();
         older.shard_sequences.insert(0, 1);
         assert!(journal.publish_checkpoint(&older, &source).await.is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_files_are_reused_by_content_digest() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let root = std::env::temp_dir().join(format!("highwater-journal-{}", Uuid::new_v4()));
+        let source = root.join("source");
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("CURRENT"), b"MANIFEST-000001\n")?;
+        fs::write(source.join("OPTIONS"), b"stable-options\n")?;
+        journal
+            .publish_checkpoint(&checkpoint_manifest("checkpoint-1", 1), &source)
+            .await?;
+        let (first, _) = journal.read_remote_checkpoint().await?.expect("checkpoint");
+
+        fs::write(source.join("CURRENT"), b"MANIFEST-000002\n")?;
+        journal
+            .publish_checkpoint(&checkpoint_manifest("checkpoint-2", 2), &source)
+            .await?;
+        let (second, _) = journal.read_remote_checkpoint().await?.expect("checkpoint");
+
+        let first_options = first
+            .files
+            .iter()
+            .find(|file| file.path == "OPTIONS")
+            .expect("OPTIONS");
+        let second_options = second
+            .files
+            .iter()
+            .find(|file| file.path == "OPTIONS")
+            .expect("OPTIONS");
+        assert_eq!(first_options.digest, second_options.digest);
+        assert_ne!(
+            first
+                .files
+                .iter()
+                .find(|file| file.path == "CURRENT")
+                .expect("CURRENT")
+                .digest,
+            second
+                .files
+                .iter()
+                .find(|file| file.path == "CURRENT")
+                .expect("CURRENT")
+                .digest,
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_restore_rejects_corrupt_content() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let root = std::env::temp_dir().join(format!("highwater-journal-{}", Uuid::new_v4()));
+        let source = root.join("source");
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("CURRENT"), b"MANIFEST-000001\n")?;
+        journal
+            .publish_checkpoint(&checkpoint_manifest("checkpoint-1", 1), &source)
+            .await?;
+        let (checkpoint, _) = journal.read_remote_checkpoint().await?.expect("checkpoint");
+        let file = checkpoint.files.first().expect("checkpoint file");
+        journal
+            .store
+            .put(
+                &journal.path(&format!("checkpoints/objects/{}", file.digest)),
+                b"corrupt".to_vec().into(),
+            )
+            .await?;
+
+        assert!(
+            journal
+                .restore_latest_checkpoint(&root.join("restored"))
+                .await
+                .is_err()
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }

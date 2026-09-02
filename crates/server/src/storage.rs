@@ -109,7 +109,6 @@ impl DurableStore {
         options.optimize_level_style_compaction(256 * 1024 * 1024);
         options.set_write_buffer_size(64 * 1024 * 1024);
         options.set_max_write_buffer_number(4);
-        options.set_disable_auto_compactions(true);
         let db = DB::open(&options, state_dir)?;
         let applied_sequences = (0..log_shards)
             .map(|shard| -> Result<u64> {

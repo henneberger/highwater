@@ -27,13 +27,13 @@ The release benchmark submits 100,000 product views across 20,000 shopping sessi
 PYTHONPATH=src python benchmarks/netherite_partition_throughput.py \
   --events 100000 \
   --active-keys 20000 \
-  --runs 1 \
+  --runs 3 \
   --partitions 20 \
-  --execution-instances 20 \
+  --execution-instances 8 --worker-startup-delay 1 \
   --workload shopping \
   --minimum-throughput 50000
 ```
 
-The September 1, 2026 development-machine run completed 53,638 events per second with host workers. Hardened container workers completed 30,608 events per second. A minimal counter workload reached 65,974 events per second through the same container boundary.
+Three September 1, 2026 development-machine runs completed a median 54,452 events per second with 8 host workers. Ten hardened container workers completed 45,782 events per second. A minimal counter workload reached 65,974 events per second through the same container boundary.
 
 The shopping workload performs local deterministic ranking. Model calls, network services, state size, key skew, object-store latency, and the production sandbox runtime need workload-specific measurement.

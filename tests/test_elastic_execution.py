@@ -141,6 +141,56 @@ class ElasticExecutionTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_zero_worker_pool_wakes_for_admitted_work(self) -> None:
+        async def run() -> None:
+            client = Client(self.target, poll_interval=0.001)
+            counters = await client.start(
+                ElasticCounter,
+                process_id="scale-to-zero-counters",
+            )
+            before_info = await counters.info()
+            before = WorkloadSample(
+                time.time(),
+                before_info["pending"],
+                before_info["running"],
+                before_info["completed"],
+            )
+            await counters.send_many([
+                {"key": f"wake-{index}", "amount": 1}
+                for index in range(200)
+            ])
+            queued = await counters.info()
+            self.assertEqual(queued["completed"], 0)
+            await asyncio.sleep(0.01)
+            decision = recommend_replicas(
+                before,
+                WorkloadSample(
+                    time.time(),
+                    queued["pending"],
+                    queued["running"],
+                    queued["completed"],
+                ),
+                current_replicas=0,
+                partitions=4,
+                policy=AutoscalingPolicy(
+                    min_replicas=0,
+                    max_replicas=4,
+                    target_events_per_second_per_replica=100,
+                    target_backlog_per_replica=100,
+                    headroom=1,
+                    scale_down_after=0,
+                ),
+            )
+            self.assertGreater(decision.desired_replicas, 0)
+            async with self.workers(decision.desired_replicas):
+                await counters.drain(timeout=20)
+            states = await asyncio.gather(*(
+                counters.state(f"wake-{index}") for index in range(200)
+            ))
+            self.assertTrue(all(state == {"total": 1} for state in states))
+
+        asyncio.run(run())
+
     def test_backlog_drives_live_scale_out_and_survives_worker_loss(self) -> None:
         async def run() -> None:
             client = Client(self.target, poll_interval=0.001)

@@ -73,6 +73,33 @@ def record(
 
 
 class ScalingAndReplayTest(unittest.TestCase):
+    def test_autoscaler_scales_idle_pool_to_zero_and_wakes_for_backlog(self) -> None:
+        policy = AutoscalingPolicy(
+            min_replicas=0,
+            max_replicas=8,
+            scale_down_after=60,
+        )
+        idle = recommend_replicas(
+            WorkloadSample(0, 0, 0, 100),
+            WorkloadSample(10, 0, 0, 100),
+            current_replicas=1,
+            partitions=4,
+            policy=policy,
+            seconds_below_target=60,
+        )
+        self.assertEqual(idle.desired_replicas, 0)
+        self.assertEqual(idle.partition_assignments, ())
+
+        wake = recommend_replicas(
+            WorkloadSample(10, 0, 0, 100),
+            WorkloadSample(20, 6_000, 0, 100),
+            current_replicas=0,
+            partitions=4,
+            policy=policy,
+        )
+        self.assertGreater(wake.desired_replicas, 0)
+        self.assertTrue(wake.partition_assignments)
+
     def test_autoscaler_adds_capacity_and_balances_partitions(self) -> None:
         decision = recommend_replicas(
             WorkloadSample(0, pending=0, running=0, completed=100),

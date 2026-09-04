@@ -1298,13 +1298,15 @@ pub(crate) async fn process_partition_loop(
                         }
                     }
                     Ok(Err(error)) => {
-                        let message = format!("{error:#}");
+                        let message = SharedTaskError(Arc::new(error));
                         for request in requests {
                             let _ = request.response.send(Err(message.clone()));
                         }
                     }
                     Err(error) => {
-                        let message = format!("process ingress task failed: {error}");
+                        let message = SharedTaskError(Arc::new(anyhow!(
+                            "process ingress task failed: {error}"
+                        )));
                         for request in requests {
                             let _ = request.response.send(Err(message.clone()));
                         }
@@ -1319,8 +1321,10 @@ pub(crate) async fn process_partition_loop(
                 .await;
                 let result = match polled {
                     Ok(Ok(activation)) => Ok(activation),
-                    Ok(Err(error)) => Err(format!("{error:#}")),
-                    Err(error) => Err(format!("process partition poll failed: {error}")),
+                    Ok(Err(error)) => Err(SharedTaskError(Arc::new(error))),
+                    Err(error) => Err(SharedTaskError(Arc::new(anyhow!(
+                        "process partition poll failed: {error}"
+                    )))),
                 };
                 let _ = response.send(result);
             }
@@ -1335,8 +1339,10 @@ pub(crate) async fn process_partition_loop(
                 .await;
                 let result = match completed {
                     Ok(Ok(())) => Ok(()),
-                    Ok(Err(error)) => Err(format!("{error:#}")),
-                    Err(error) => Err(format!("process partition completion failed: {error}")),
+                    Ok(Err(error)) => Err(SharedTaskError(Arc::new(error))),
+                    Err(error) => Err(SharedTaskError(Arc::new(anyhow!(
+                        "process partition completion failed: {error}"
+                    )))),
                 };
                 let _ = response.send(result);
             }
@@ -1348,8 +1354,10 @@ pub(crate) async fn process_partition_loop(
                 .await;
                 let result = match renewed {
                     Ok(Ok(lease_expires)) => Ok(lease_expires),
-                    Ok(Err(error)) => Err(format!("{error:#}")),
-                    Err(error) => Err(format!("process partition renewal failed: {error}")),
+                    Ok(Err(error)) => Err(SharedTaskError(Arc::new(error))),
+                    Err(error) => Err(SharedTaskError(Arc::new(anyhow!(
+                        "process partition renewal failed: {error}"
+                    )))),
                 };
                 let _ = response.send(result);
             }
@@ -1517,7 +1525,7 @@ pub(crate) async fn append_remote_process_records(
     let result = receiver
         .await
         .map_err(|_| anyhow!("process partition ingress response was dropped"))?
-        .map_err(anyhow::Error::msg)?;
+        .map_err(anyhow::Error::new)?;
     Ok(Json(result))
 }
 

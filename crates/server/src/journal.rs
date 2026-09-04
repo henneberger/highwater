@@ -47,17 +47,17 @@ enum JournalCommand {
         partition: u32,
         owner_epoch: u64,
         payload: Vec<u8>,
-        response: std_mpsc::Sender<Result<u64, String>>,
+        response: std_mpsc::Sender<Result<u64>>,
     },
     PublishCheckpoint {
         manifest: CheckpointManifest,
         source: PathBuf,
-        response: std_mpsc::Sender<Result<(), String>>,
+        response: std_mpsc::Sender<Result<()>>,
     },
     Sync {
         partition: u32,
         after_position: u64,
-        response: std_mpsc::Sender<Result<Vec<RecoveredRecord>, String>>,
+        response: std_mpsc::Sender<Result<Vec<RecoveredRecord>>>,
     },
 }
 
@@ -168,8 +168,7 @@ impl RemoteJournal {
                                             let position = next.head.position;
                                             *cursor = Some(next);
                                             position
-                                        })
-                                        .map_err(|error| format!("{error:#}"));
+                                        });
                                     let _ = response.send(result);
                                 }
                                 JournalCommand::PublishCheckpoint {
@@ -177,10 +176,8 @@ impl RemoteJournal {
                                     source,
                                     response,
                                 } => {
-                                    let result = journal
-                                        .publish_checkpoint(&manifest, &source)
-                                        .await
-                                        .map_err(|error| format!("{error:#}"));
+                                    let result =
+                                        journal.publish_checkpoint(&manifest, &source).await;
                                     let _ = response.send(result);
                                 }
                                 JournalCommand::Sync {
@@ -195,8 +192,7 @@ impl RemoteJournal {
                                         .map(|(next, records)| {
                                             *cursor = next;
                                             records
-                                        })
-                                        .map_err(|error| format!("{error:#}"));
+                                        });
                                     let _ = response.send(result);
                                 }
                             }
@@ -224,7 +220,6 @@ impl RemoteJournal {
         result
             .recv()
             .context("journal service stopped during append")?
-            .map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn publish_checkpoint(
@@ -243,7 +238,6 @@ impl RemoteJournal {
         result
             .recv()
             .context("journal service stopped during checkpoint publication")?
-            .map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn sync(&self, partition: u32, after_position: u64) -> Result<Vec<RecoveredRecord>> {
@@ -258,7 +252,6 @@ impl RemoteJournal {
         result
             .recv()
             .context("journal service stopped during synchronization")?
-            .map_err(anyhow::Error::msg)
     }
 }
 
@@ -538,7 +531,7 @@ impl ConditionalJournal {
         if let Err(error) = result {
             let observed = self.read_remote_checkpoint().await?;
             if observed.as_ref().map(|(value, _)| value) != Some(&checkpoint) {
-                return Err(anyhow!("checkpoint publication was fenced: {error}"));
+                return Err(anyhow::Error::new(error).context("checkpoint publication was fenced"));
             }
         }
         Ok(())
@@ -657,9 +650,9 @@ impl ConditionalJournal {
                 // record until reachability-aware garbage collection can prove it
                 // is unused. Do not return the successor's cursor as our success:
                 // the caller has not applied that successor's payload locally.
-                return Err(anyhow!(
-                    "partition {partition} conditional append was fenced: {error}"
-                ));
+                return Err(anyhow::Error::new(error).context(format!(
+                    "partition {partition} conditional append was fenced"
+                )));
             }
         };
         Ok(JournalCursor {

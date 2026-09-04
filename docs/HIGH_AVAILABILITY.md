@@ -56,6 +56,11 @@ The local drill uses MinIO and OS processes, not a deployed Kubernetes cluster.
 No production infrastructure has been changed. Extended CI tests are manual-only;
 there is no nightly schedule.
 
+[Live-owner network isolation](NETWORK_PARTITION_VALIDATION.md) adds a surviving
+but storage-isolated old owner, takeover, reconnection, stale-grant rejection, and
+producer retry checks. It also documents the storage-error classification defect
+that the isolation drill reproduced and repaired.
+
 Validation on 2026-09-04: 35 Rust workspace tests passed; the Python suite ran 77
 tests with 74 passing and three opt-in chaos tests skipped. All three chaos tests
 then passed separately, including a second successful live-worker failover run.

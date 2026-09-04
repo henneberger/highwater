@@ -48,12 +48,15 @@ def request_json(
             payload = response.read()
             return response.status, json.loads(payload) if payload else None
     except urllib.error.HTTPError as error:
-        payload = error.read()
         try:
-            detail = json.loads(payload) if payload else None
-        except json.JSONDecodeError:
-            detail = payload.decode(errors="replace")
-        return error.code, detail
+            payload = error.read()
+            try:
+                detail = json.loads(payload) if payload else None
+            except json.JSONDecodeError:
+                detail = payload.decode(errors="replace")
+            return error.code, detail
+        finally:
+            error.close()
 
 
 @unittest.skipUnless(
@@ -61,6 +64,109 @@ def request_json(
     "set HIGHWATER_S3_CHAOS=1 to run the multi-process S3 failure test",
 )
 class S3ChaosTest(unittest.TestCase):
+    @unittest.skipIf(os.environ.get("HIGHWATER_S3_CHAOS_URI"), "TCP isolation drill uses local MinIO")
+    def test_isolated_live_owner_cannot_commit_after_reconnection(self) -> None:
+        from highwater import Client
+        from highwater.client import ProcessHandle
+        if __package__:
+            from .network_faults import TCPFaultProxy
+        else:
+            from network_faults import TCPFaultProxy
+
+        upstream = urllib.parse.urlparse(self.aws_env["AWS_ENDPOINT"])
+        proxy = TCPFaultProxy((upstream.hostname, upstream.port))
+        self.addCleanup(proxy.close)
+        a_public, a_execution, b_public, b_execution = (free_port() for _ in range(4))
+        node_a = self._start_node("net-a", a_public, a_execution, storage_endpoint=proxy.endpoint)
+        self._wait_for_owners(a_public, "net-a")
+        node_b = self._start_node("net-b", b_public, b_execution)
+        self._wait_for_owners(b_public, "net-a")
+        self.assertTrue(proxy.used.is_set(), "owner bypassed the storage proxy")
+        status, detail = request_json("POST", f"http://127.0.0.1:{a_public}/streams", {"name": "network-input"})
+        self.assertEqual(status, 201, detail)
+        status, detail = request_json("POST", f"http://127.0.0.1:{a_public}/processes", {
+            "process_id": "network-counter", "stream": "network-input", "workflow_type": "HACounter",
+            "state_version": 1, "build_id": "chaos-v1", "task_queue": "default",
+            "event_time_gate": "immediate", "direct_ingress": True,
+            "max_attempts": 10, "batch_max_size": 4, "batch_max_delay": 0,
+        })
+        self.assertIn(status, (200, 201), detail)
+
+        async def publish(port, first, end):
+            handle = ProcessHandle(Client(f"http://127.0.0.1:{port}"), "network-counter",
+                                   "network-input", key_field="key", direct_ingress=True)
+            for event in range(first, end):
+                await handle.send({"key": f"key-{event % 4}", "delta": 1},
+                                  event_id=f"event-{event}", event_time=event)
+
+        asyncio.run(asyncio.wait_for(publish(a_public, 0, 1), 30))
+        stale = self._poll(a_execution)
+        worker = self._start_worker("network-b", b_execution)
+        proxy.blocked.set()
+        # The publisher remains active through lease expiry and takeover. Only
+        # A's storage connections are cut; A itself and its HTTP listeners live.
+        asyncio.run(asyncio.wait_for(publish(b_public, 1, 33), 90))
+        self._wait_for_owners(b_public, "net-b", minimum_epoch=2)
+        self.assertIsNone(node_a.poll(), "isolation unexpectedly killed old owner")
+        self.assertIsNone(worker.poll(), "standby worker exited")
+
+        try:
+            status, detail = request_json("POST", f"http://127.0.0.1:{a_execution}/internal/v1/process-tasks/complete-batch",
+                                          self._completion(stale, 999), timeout=10)
+        except (TimeoutError, urllib.error.URLError):
+            # A lost response is uncertain; the exact-state check after healing
+            # still verifies that this stale transition never became authoritative.
+            pass
+        else:
+            self.assertGreaterEqual(status, 400, f"isolated owner acknowledged a completion: {detail}")
+
+        proxy.blocked.clear()
+        self._wait_for_owners(a_public, "net-b", minimum_epoch=2)
+        for port in (a_execution, b_execution):
+            status, detail = request_json("POST", f"http://127.0.0.1:{port}/internal/v1/process-tasks/complete-batch",
+                                          self._completion(stale, 999))
+            self.assertGreaterEqual(status, 400, detail)
+            status, detail = request_json("POST", f"http://127.0.0.1:{port}/internal/v1/process-tasks/renew", {
+                "protocol_version": 1, "lease_token": stale["lease_token"],
+                "partition_id": stale["partition_id"], "owner_epoch": stale["owner_epoch"],
+                "activation_sequence": stale["activation_sequence"], "extend_seconds": 30,
+            })
+            self.assertGreaterEqual(status, 400, detail)
+        # The returned old core must route new work to the current owner, and a
+        # producer retry of the first batch must not increment state twice.
+        asyncio.run(asyncio.wait_for(publish(a_public, 0, 65), 90))
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status, process = request_json("GET", f"http://127.0.0.1:{b_public}/processes/network-counter")
+            self.assertEqual(status, 200, process)
+            self.assertEqual(process["failed"], 0, process)
+            if process["completed"] == 65:
+                break
+            self.assertIsNone(worker.poll())
+            time.sleep(0.1)
+        else:
+            self.fail(f"network workload failed to drain: {process}")
+        for key in range(4):
+            status, state = request_json("GET", f"http://127.0.0.1:{b_public}/processes/network-counter/keys/key-{key}")
+            self.assertEqual(status, 200, state)
+            self.assertEqual(state["state"], {"total": 17 if key == 0 else 16})
+        self._wait_for_owners(a_public, "net-b", minimum_epoch=2)
+        self.assertIsNone(node_a.poll())
+        self.assertIsNone(node_b.poll())
+
+    def _start_worker(self, name: str, port: int) -> subprocess.Popen[bytes]:
+        log = (self.root / f"worker-{name}.log").open("ab")
+        worker = subprocess.Popen([
+            sys.executable, "-m", "highwater.rust_worker", "ha_workload",
+            "--target", f"http://127.0.0.1:{port}", "--process-only",
+            "--task-queue", "default", "--process-partitions", "1,2",
+        ], cwd=ROOT, env={**os.environ,
+            "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT / "tests"))),
+            "HIGHWATER_EXECUTION_TOKEN": self.execution_token,
+        }, stdout=log, stderr=subprocess.STDOUT)
+        self.processes.append((worker, log))
+        return worker
+
     def test_live_workers_and_ingestion_survive_both_core_failures(self) -> None:
         from highwater import Client
         from highwater.client import ProcessHandle
@@ -82,17 +188,7 @@ class S3ChaosTest(unittest.TestCase):
         self.assertIn(status, (200, 201), detail)
         workers = []
         for name, port in (("a", a_execution), ("b", b_execution)):
-            log = (self.root / f"worker-{name}.log").open("ab")
-            worker = subprocess.Popen([
-                sys.executable, "-m", "highwater.rust_worker", "ha_workload",
-                "--target", f"http://127.0.0.1:{port}", "--process-only",
-                "--task-queue", "default", "--process-partitions", "1,2",
-            ], cwd=ROOT, env={**os.environ,
-                "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT / "tests"))),
-                "HIGHWATER_EXECUTION_TOKEN": self.execution_token,
-            }, stdout=log, stderr=subprocess.STDOUT)
-            self.processes.append((worker, log))
-            workers.append(worker)
+            workers.append(self._start_worker(name, port))
 
         def publish_during_failure(port: int, victim: subprocess.Popen[bytes], first: int) -> None:
             admitted = threading.Event()
@@ -310,7 +406,8 @@ class S3ChaosTest(unittest.TestCase):
         )
         return f"s3://highwater-chaos/{run_id}"
 
-    def _start_node(self, node_id: str, public_port: int, execution_port: int) -> subprocess.Popen[bytes]:
+    def _start_node(self, node_id: str, public_port: int, execution_port: int,
+                    *, storage_endpoint: str | None = None) -> subprocess.Popen[bytes]:
         node_root = self.root / node_id
         node_root.mkdir(parents=True, exist_ok=True)
         log = (self.root / f"{node_id}.log").open("ab")
@@ -343,7 +440,8 @@ class S3ChaosTest(unittest.TestCase):
                 str(self.owner_lease_seconds),
             ],
             cwd=ROOT,
-            env=self.aws_env,
+            env={**self.aws_env, **({"AWS_ENDPOINT": storage_endpoint,
+                                    "AWS_ENDPOINT_URL_S3": storage_endpoint} if storage_endpoint else {})},
             stdout=log,
             stderr=subprocess.STDOUT,
         )

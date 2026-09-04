@@ -625,22 +625,24 @@ pub(crate) struct ProcessIngressRequest {
     pub(crate) process_id: String,
     pub(crate) records: Vec<(usize, AppendStreamRecordRequest)>,
     pub(crate) detailed: bool,
-    pub(crate) response: oneshot::Sender<std::result::Result<ProcessIngressResult, String>>,
+    pub(crate) response:
+        oneshot::Sender<std::result::Result<ProcessIngressResult, SharedTaskError>>,
 }
 
 pub(crate) enum ProcessPartitionCommand {
     Ingress(ProcessIngressRequest),
     Poll {
         request: PollRequest,
-        response: oneshot::Sender<std::result::Result<Option<ProcessActivationBatch>, String>>,
+        response:
+            oneshot::Sender<std::result::Result<Option<ProcessActivationBatch>, SharedTaskError>>,
     },
     Complete {
         completion: ProcessCompletionBatch,
-        response: oneshot::Sender<std::result::Result<(), String>>,
+        response: oneshot::Sender<std::result::Result<(), SharedTaskError>>,
     },
     Renew {
         renewal: ProcessLeaseRenewal,
-        response: oneshot::Sender<std::result::Result<f64, String>>,
+        response: oneshot::Sender<std::result::Result<f64, SharedTaskError>>,
     },
 }
 

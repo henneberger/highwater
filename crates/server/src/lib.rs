@@ -7,6 +7,8 @@ mod maintenance;
 mod model;
 mod operators;
 mod process;
+#[cfg(test)]
+mod process_simulation;
 mod runtime;
 mod state;
 mod storage;

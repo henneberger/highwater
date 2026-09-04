@@ -1,0 +1,47 @@
+name: Reliability
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reliability-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure native build
+        run: |
+          clang_lib="$(llvm-config --libdir)"
+          compgen -G "$clang_lib/libclang.so*" > /dev/null
+          echo "LIBCLANG_PATH=$clang_lib" >> "$GITHUB_ENV"
+      - name: Rust safety checks
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+      - name: Build integration server
+        run: cargo build --locked -p highwater-server
+      - name: Python and execution recovery tests
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Manual object-store crash recovery
+        if: github.event_name == 'workflow_dispatch'
+        run: HIGHWATER_S3_CHAOS=1 PYTHONPATH=src python -m unittest discover -s tests -p test_s3_chaos.py -v
+      - name: Extended deterministic journal histories
+        if: github.event_name == 'workflow_dispatch'
+        run: HIGHWATER_JOURNAL_SEED_COUNT=4096 cargo test --locked -p highwater-server seeded_journal_histories_match_reference_log -- --nocapture
+      - name: Extended deterministic process histories
+        if: github.event_name == 'workflow_dispatch'
+        run: HIGHWATER_PROCESS_SEED_COUNT=128 cargo test --locked -p highwater-server seeded_process_histories -- --nocapture

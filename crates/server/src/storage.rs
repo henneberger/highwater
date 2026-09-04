@@ -11,6 +11,93 @@ pub(crate) struct Mutation {
     pub(crate) encoded_value: Option<Vec<u8>>,
 }
 
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn stale_local_checkpoint_cannot_replace_recovery_point_after_cleanup() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "highwater-local-checkpoint-race-{}",
+            Uuid::new_v4()
+        ));
+        let result = check_stale_checkpoint(&root);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    fn check_stale_checkpoint(root: &FsPath) -> Result<()> {
+        let state = root.join("state");
+        let objects = root.join("objects");
+        let store = DurableStore::open_sharded_with_journal(&state, &objects, 1, None)?;
+        let mutation = |value| Mutation {
+            op: "put".to_owned(),
+            key: "counter".to_owned(),
+            end_key: None,
+            value: Some(json!(value)),
+            encoded_value: None,
+        };
+        store.commit(vec![mutation(1)])?;
+        let older = store.prepare_checkpoint()?;
+        store.commit(vec![mutation(2)])?;
+        let newer = store.prepare_checkpoint()?;
+        store.publish_checkpoint(&newer)?;
+        let stale_result = store.publish_checkpoint(&older);
+        drop(store);
+        fs::remove_dir_all(&state)?;
+        let restored = DurableStore::open_sharded_with_journal(&state, &objects, 1, None)?;
+        anyhow::ensure!(
+            restored.get::<u64>("counter")? == Some(2),
+            "stale checkpoint publication lost acknowledged state after WAL cleanup"
+        );
+        anyhow::ensure!(
+            stale_result.is_err(),
+            "stale checkpoint publication was accepted"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn publishing_with_newer_prepared_snapshots_keeps_active_checkpoint() -> Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("highwater-checkpoint-retention-{}", Uuid::new_v4()));
+        let result = (|| -> Result<()> {
+            let state = root.join("state");
+            let objects = root.join("objects");
+            let store = DurableStore::open_sharded_with_journal(&state, &objects, 1, None)?;
+            let mut snapshots = Vec::new();
+            for value in 1..=3 {
+                store.commit(vec![Mutation {
+                    op: "put".to_owned(),
+                    key: "counter".to_owned(),
+                    end_key: None,
+                    value: Some(json!(value)),
+                    encoded_value: None,
+                }])?;
+                snapshots.push(store.prepare_checkpoint()?);
+            }
+            store.publish_checkpoint(&snapshots[0])?;
+            anyhow::ensure!(
+                store
+                    .checkpoint_dir
+                    .join(&snapshots[0].checkpoint_id)
+                    .is_dir(),
+                "cleanup deleted the published checkpoint"
+            );
+            drop(store);
+            fs::remove_dir_all(&state)?;
+            let restored = DurableStore::open_sharded_with_journal(&state, &objects, 1, None)?;
+            anyhow::ensure!(
+                restored.get::<u64>("counter")? == Some(3),
+                "checkpoint plus uncheckpointed tail failed to restore"
+            );
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct WalRecord {
     pub(crate) format: u32,
@@ -27,7 +114,7 @@ pub(crate) struct WalRecord {
     pub(crate) delete_ranges: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct CheckpointManifest {
     pub(crate) format: u32,
     pub(crate) checkpoint_id: String,
@@ -46,6 +133,7 @@ pub(crate) struct DurableStore {
     pub(crate) checkpoint_dir: PathBuf,
     pub(crate) manifest_path: PathBuf,
     pub(crate) sequences: Vec<Mutex<u64>>,
+    checkpoint_publication_lock: Mutex<()>,
     journal: Option<RemoteJournal>,
 }
 
@@ -181,6 +269,7 @@ impl DurableStore {
             checkpoint_dir,
             manifest_path,
             sequences,
+            checkpoint_publication_lock: Mutex::new(()),
             journal,
         })
     }
@@ -473,6 +562,30 @@ impl DurableStore {
     }
 
     pub(crate) fn publish_checkpoint(&self, manifest: &CheckpointManifest) -> Result<()> {
+        // Publication and cleanup are one local critical section. Otherwise a
+        // delayed publisher can replace the recovery pointer after a newer one
+        // has already removed the WAL that the old snapshot would need.
+        let _guard = self
+            .checkpoint_publication_lock
+            .lock()
+            .map_err(|_| anyhow!("checkpoint publication lock poisoned"))?;
+        if let Some(current) = Self::read_manifest(&self.manifest_path)? {
+            for (partition, position) in &current.shard_sequences {
+                if manifest
+                    .shard_sequences
+                    .get(partition)
+                    .is_none_or(|next| next < position)
+                {
+                    bail!("checkpoint publication would regress partition {partition}");
+                }
+            }
+        }
+        if !self.checkpoint_dir.join(&manifest.checkpoint_id).is_dir() {
+            bail!(
+                "checkpoint snapshot does not exist: {}",
+                manifest.checkpoint_id
+            );
+        }
         if let Some(journal) = &self.journal {
             journal.publish_checkpoint(
                 manifest.clone(),
@@ -509,9 +622,21 @@ impl DurableStore {
         let mut checkpoints: Vec<_> = fs::read_dir(&self.checkpoint_dir)?
             .filter_map(std::result::Result::ok)
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            // Prepared snapshots may be newer than the published checkpoint.
+            // Never let them displace the active recovery snapshot. Retain equal
+            // cuts as well, since another publisher may still be using one.
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.split_once('-'))
+                    .and_then(|(sequence, _)| sequence.parse::<u64>().ok())
+                    .is_some_and(|sequence| sequence < manifest.sequence)
+            })
             .collect();
         checkpoints.sort_by_key(|entry| entry.file_name());
-        let remove_count = checkpoints.len().saturating_sub(2);
+        // Keep one older snapshot in addition to the current and prepared cuts.
+        let remove_count = checkpoints.len().saturating_sub(1);
         for entry in checkpoints.into_iter().take(remove_count) {
             fs::remove_dir_all(entry.path())?;
         }

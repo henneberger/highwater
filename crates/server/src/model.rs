@@ -744,8 +744,17 @@ pub(crate) fn default_task_queue() -> String {
 }
 
 pub(crate) fn now() -> f64 {
+    #[cfg(test)]
+    if let Some(timestamp) = TEST_TIME.with(|clock| clock.get()) {
+        return timestamp;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before epoch")
         .as_secs_f64()
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_TIME: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
 }

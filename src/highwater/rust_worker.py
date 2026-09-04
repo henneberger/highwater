@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import logging
 import os
 import time
 import traceback
@@ -20,6 +21,12 @@ from .model import Event
 from .registry import Registry
 from .streaming import _versioned_runtime
 from .workflow_runner import WorkflowRunner
+
+
+class _RequestError(RuntimeError):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class _RemoteActivityClient:
@@ -101,9 +108,16 @@ class RustWorker:
                     return None
                 return json.loads(response.read() or b"{}")
         except HTTPError as error:
-            message = json.loads(error.read() or b"{}").get("error", str(error))
-            error.close()
-            raise RuntimeError(message) from error
+            try:
+                payload = error.read()
+                try:
+                    detail = json.loads(payload)
+                except (ValueError, UnicodeError):
+                    detail = None
+                message = detail.get("error") if isinstance(detail, dict) else None
+                raise _RequestError(error.code, str(message or error)) from error
+            finally:
+                error.close()
 
     def _poll_body(self) -> dict[str, Any]:
         return {
@@ -277,6 +291,19 @@ class RustWorker:
             asyncio.create_task(self._renew_process_batch(batch, stop))
             for batch, stop in zip(batches, renewal_stops, strict=True)
         ]
+        try:
+            await self._execute_process_batches(batches)
+        finally:
+            # Stop renewal even when execution is cancelled or fails before completion.
+            # Otherwise abandoned work remains leased to a worker that cannot finish it.
+            for stop in renewal_stops:
+                stop.set()
+            for task in renewal_tasks:
+                task.cancel()
+            await asyncio.gather(*renewal_tasks, return_exceptions=True)
+        return True
+
+    async def _execute_process_batches(self, batches: list[dict[str, Any]]) -> None:
         items_by_batch: list[list[dict[str, Any] | None]] = [
             [None] * len(batch["envelopes"])
             for batch in batches
@@ -346,13 +373,7 @@ class RustWorker:
                 if "task lease lost" not in str(error):
                     raise
 
-        try:
-            await asyncio.gather(*(complete(body) for body in completions))
-        finally:
-            for stop in renewal_stops:
-                stop.set()
-            await asyncio.gather(*renewal_tasks, return_exceptions=True)
-        return True
+        await asyncio.gather(*(complete(body) for body in completions))
 
     async def _execute_process_chunk(
         self,
@@ -498,15 +519,33 @@ class RustWorker:
         return True
 
     async def run_forever(self) -> None:
+        initial_retry_delay = min(5.0, max(0.1, self.poll_interval))
+        retry_delay = initial_retry_delay
         while True:
-            if self._process_only:
-                if not await self._process_once():
-                    await asyncio.sleep(self.poll_interval)
+            operations = [self._process_once()]
+            if not self._process_only:
+                operations.extend([
+                    self._workflow_once(), self._activity_once(), self._query_once(),
+                ])
+            # Settle every lane before retrying, so an outage cannot spawn overlapping work.
+            results = await asyncio.gather(*operations, return_exceptions=True)
+            failures = [result for result in results if isinstance(result, BaseException)]
+            for failure in failures:
+                transient = isinstance(failure, OSError) or (
+                    isinstance(failure, _RequestError)
+                    and failure.status in {408, 429, 500, 502, 503, 504}
+                )
+                if not transient:
+                    raise failure
+            if failures:
+                logging.getLogger(__name__).warning(
+                    "Worker request failed; retrying in %.2fs: %s", retry_delay, failures[0]
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(5.0, retry_delay * 2)
                 continue
-            process_work, workflow_work, activity_work, query_work = await asyncio.gather(
-                self._process_once(), self._workflow_once(), self._activity_once(), self._query_once(),
-            )
-            if not process_work and not workflow_work and not activity_work and not query_work:
+            retry_delay = initial_retry_delay
+            if not any(results):
                 await asyncio.sleep(self.poll_interval)
 
 

@@ -61,7 +61,7 @@ enum JournalCommand {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct RemoteCheckpoint {
     format: u32,
     manifest: CheckpointManifest,
@@ -269,9 +269,24 @@ pub(crate) struct ConditionalJournal {
     #[cfg(test)]
     fail_after_head_commit: Arc<AtomicBool>,
     #[cfg(test)]
+    ambiguous_head_pause: Arc<Mutex<Option<Arc<HeadResponsePause>>>>,
+    #[cfg(test)]
+    fail_before_head_commit: Arc<AtomicBool>,
+    #[cfg(test)]
     fail_before_checkpoint_pointer: Arc<AtomicBool>,
     #[cfg(test)]
     fail_after_checkpoint_pointer_commit: Arc<AtomicBool>,
+    #[cfg(test)]
+    checkpoint_before_pause: Arc<Mutex<Option<Arc<HeadResponsePause>>>>,
+    #[cfg(test)]
+    checkpoint_after_pause: Arc<Mutex<Option<Arc<HeadResponsePause>>>>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct HeadResponsePause {
+    committed: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
 }
 
 impl ConditionalJournal {
@@ -293,9 +308,17 @@ impl ConditionalJournal {
             #[cfg(test)]
             fail_after_head_commit: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            ambiguous_head_pause: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            fail_before_head_commit: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
             fail_before_checkpoint_pointer: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_after_checkpoint_pointer_commit: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            checkpoint_before_pause: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            checkpoint_after_pause: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -305,8 +328,12 @@ impl ConditionalJournal {
             store: Arc::new(object_store::memory::InMemory::new()),
             prefix: "test".to_owned(),
             fail_after_head_commit: Arc::new(AtomicBool::new(false)),
+            ambiguous_head_pause: Arc::new(Mutex::new(None)),
+            fail_before_head_commit: Arc::new(AtomicBool::new(false)),
             fail_before_checkpoint_pointer: Arc::new(AtomicBool::new(false)),
             fail_after_checkpoint_pointer_commit: Arc::new(AtomicBool::new(false)),
+            checkpoint_before_pause: Arc::new(Mutex::new(None)),
+            checkpoint_after_pause: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -474,6 +501,14 @@ impl ConditionalJournal {
         {
             bail!("injected checkpoint pointer failure");
         }
+        #[cfg(test)]
+        {
+            let pause = self.checkpoint_before_pause.lock().unwrap().take();
+            if let Some(pause) = pause {
+                pause.committed.notify_one();
+                pause.resume.notified().await;
+            }
+        }
         let result = self
             .store
             .put_opts(
@@ -488,6 +523,11 @@ impl ConditionalJournal {
                 .fail_after_checkpoint_pointer_commit
                 .swap(false, Ordering::SeqCst)
         {
+            let pause = self.checkpoint_after_pause.lock().unwrap().take();
+            if let Some(pause) = pause {
+                pause.committed.notify_one();
+                pause.resume.notified().await;
+            }
             Err(ObjectStoreError::Generic {
                 store: "injected",
                 source: anyhow!("ambiguous checkpoint commit response").into(),
@@ -497,11 +537,7 @@ impl ConditionalJournal {
         };
         if let Err(error) = result {
             let observed = self.read_remote_checkpoint().await?;
-            if observed
-                .as_ref()
-                .map(|(value, _)| &value.manifest.checkpoint_id)
-                != Some(&manifest.checkpoint_id)
-            {
+            if observed.as_ref().map(|(value, _)| value) != Some(&checkpoint) {
                 return Err(anyhow!("checkpoint publication was fenced: {error}"));
             }
         }
@@ -581,6 +617,10 @@ impl ConditionalJournal {
         let mode = expected.map_or(PutMode::Create, |cursor| {
             PutMode::Update(cursor.version.clone())
         });
+        #[cfg(test)]
+        if self.fail_before_head_commit.swap(false, Ordering::SeqCst) {
+            bail!("injected crash before head commit");
+        }
         let committed = self
             .store
             .put_opts(
@@ -592,6 +632,11 @@ impl ConditionalJournal {
         #[cfg(test)]
         let committed =
             if committed.is_ok() && self.fail_after_head_commit.swap(false, Ordering::SeqCst) {
+                let pause = self.ambiguous_head_pause.lock().unwrap().take();
+                if let Some(pause) = pause {
+                    pause.committed.notify_one();
+                    pause.resume.notified().await;
+                }
                 Err(ObjectStoreError::Generic {
                     store: "injected",
                     source: anyhow!("ambiguous head commit response").into(),
@@ -606,7 +651,12 @@ impl ConditionalJournal {
                 if observed.as_ref().is_some_and(|cursor| cursor.head == head) {
                     return Ok(observed.expect("matching journal head"));
                 }
-                let _ = self.store.delete(&record_path).await;
+                // A different head does not prove this record was rejected: our CAS
+                // may have succeeded before its response was lost, with another
+                // writer subsequently appending a descendant. Keep the immutable
+                // record until reachability-aware garbage collection can prove it
+                // is unused. Do not return the successor's cursor as our success:
+                // the caller has not applied that successor's payload locally.
                 return Err(anyhow!(
                     "partition {partition} conditional append was fenced: {error}"
                 ));
@@ -717,6 +767,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ambiguous_response_after_takeover_preserves_committed_ancestor() -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let pause = Arc::new(HeadResponsePause::default());
+        *journal.ambiguous_head_pause.lock().unwrap() = Some(pause.clone());
+        journal.inject_ambiguous_head_commit();
+        let writer = journal.clone();
+        let pending = tokio::spawn(async move {
+            writer
+                .append(1, None, 1, b"accepted-before-response-loss".to_vec())
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            pause.committed.notified(),
+        )
+        .await?;
+        let first = journal.read_head(1).await?.expect("committed head");
+        let second = journal
+            .append(1, Some(&first), 2, b"takeover".to_vec())
+            .await?;
+        pause.resume.notify_one();
+        // The original caller may receive an uncertain result, but must not destroy
+        // a record that the acknowledged successor now depends on.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), pending).await??;
+        let (head, records) = journal.recover(1, 0).await?;
+        assert_eq!(head.expect("head").head, second.head);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].payload, b"accepted-before-response-loss");
+        assert_eq!(records[1].payload, b"takeover");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn conditional_head_allows_only_one_competing_owner() -> Result<()> {
         let journal = ConditionalJournal::memory();
         let first = journal.append(2, None, 1, b"first".to_vec()).await?;
@@ -734,6 +817,167 @@ mod tests {
         let (_, records) = journal.recover(2, 0).await?;
         assert_eq!(records.len(), 2);
         assert!(records[1].payload == b"left" || records[1].payload == b"right");
+        Ok(())
+    }
+
+    // A small executable oracle for the real journal implementation. The schedule
+    // is seeded, and the injected failure points never rely on wall-clock sleeps.
+    // Set HIGHWATER_JOURNAL_SEED to replay one history from a failing CI log.
+    #[tokio::test]
+    async fn seeded_journal_histories_match_reference_log() -> Result<()> {
+        let seeds = match std::env::var("HIGHWATER_JOURNAL_SEED") {
+            Ok(seed) => vec![seed.parse::<u64>()?],
+            Err(_) => {
+                let count = std::env::var("HIGHWATER_JOURNAL_SEED_COUNT")
+                    .ok()
+                    .map(|count| count.parse::<u64>())
+                    .transpose()?
+                    .unwrap_or(128);
+                anyhow::ensure!(count > 0, "journal simulation seed count must be positive");
+                (0..count).collect()
+            }
+        };
+        for seed in seeds {
+            let mut trace = Vec::new();
+            generated_history(seed, &mut trace).await.with_context(|| {
+                format!(
+                    "journal simulation seed={seed}; replay with HIGHWATER_JOURNAL_SEED={seed}\n{}",
+                    trace.join("\n")
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn generated_history(seed: u64, trace: &mut Vec<String>) -> Result<()> {
+        let journal = ConditionalJournal::memory();
+        let mut random = seed;
+        let mut model: Vec<(u64, Vec<u8>)> = Vec::new();
+        let mut cursors: [Option<JournalCursor>; 3] = [None, None, None];
+        for step in 0..64 {
+            random = random
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let node = (random >> 32) as usize % cursors.len();
+            let action = (random >> 48) % 8;
+            trace.push(format!(
+                "step={step} node={node} action={action} committed={}",
+                model.len()
+            ));
+            match action {
+                0 => {
+                    // Read the current head; other nodes retain their stale views.
+                    cursors[node] = journal.read_head(1).await?;
+                }
+                1 => {
+                    // Drop local state and rebuild it using a reference checkpoint
+                    // prefix plus the actual retained journal tail.
+                    cursors[node] = None;
+                    let cut = random as usize % (model.len() + 1);
+                    let (head, tail) = journal.recover(1, cut as u64).await?;
+                    let mut restored = model[..cut].to_vec();
+                    restored.extend(
+                        tail.into_iter()
+                            .map(|record| (record.owner_epoch, record.payload)),
+                    );
+                    anyhow::ensure!(
+                        restored == model,
+                        "checkpoint prefix plus tail differs from reference"
+                    );
+                    cursors[node] = head;
+                }
+                7 => {
+                    // Lose a successful response while a different owner advances
+                    // the head. The first writer must preserve its committed record.
+                    let current = journal.read_head(1).await?;
+                    let epoch = model.last().map_or(1, |entry| entry.0);
+                    let payload = format!("{seed}:{step}:ambiguous").into_bytes();
+                    let pause = Arc::new(HeadResponsePause::default());
+                    *journal.ambiguous_head_pause.lock().unwrap() = Some(pause.clone());
+                    journal.inject_ambiguous_head_commit();
+                    let writer = journal.clone();
+                    let sent = payload.clone();
+                    let pending = tokio::spawn(async move {
+                        writer.append(1, current.as_ref(), epoch, sent).await
+                    });
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        pause.committed.notified(),
+                    )
+                    .await?;
+                    model.push((epoch, payload));
+                    let first = journal
+                        .read_head(1)
+                        .await?
+                        .expect("head committed before pause");
+                    let successor = format!("{seed}:{step}:successor").into_bytes();
+                    let next = journal
+                        .append(1, Some(&first), epoch + 1, successor.clone())
+                        .await;
+                    pause.resume.notify_one();
+                    let uncertain =
+                        tokio::time::timeout(std::time::Duration::from_secs(5), pending).await??;
+                    cursors[node] = Some(next?);
+                    model.push((epoch + 1, successor));
+                    anyhow::ensure!(
+                        uncertain.is_err(),
+                        "must not hand the caller an unapplied successor cursor"
+                    );
+                }
+                _ => {
+                    let cursor = cursors[node].as_ref();
+                    let previous_position = cursor.map_or(0, |cursor| cursor.head.position);
+                    let previous_epoch = cursor.map_or(1, |cursor| cursor.head.owner_epoch);
+                    let epoch =
+                        previous_epoch + u64::from(action == 3) + 2 * u64::from(action == 4);
+                    let crash = action == 5;
+                    let ambiguous = action == 6;
+                    journal
+                        .fail_before_head_commit
+                        .store(crash, Ordering::SeqCst);
+                    journal
+                        .fail_after_head_commit
+                        .store(ambiguous, Ordering::SeqCst);
+                    let payload = format!("{seed}:{step}:{node}").into_bytes();
+                    let result = journal.append(1, cursor, epoch, payload.clone()).await;
+                    // Invalid epochs can reject before reaching an injected hook.
+                    journal
+                        .fail_before_head_commit
+                        .store(false, Ordering::SeqCst);
+                    journal
+                        .fail_after_head_commit
+                        .store(false, Ordering::SeqCst);
+                    let accepted = previous_position == model.len() as u64
+                        && (cursor.is_none() || action != 4)
+                        && !crash;
+                    anyhow::ensure!(
+                        result.is_ok() == accepted,
+                        "append result differs from reference: {result:?}"
+                    );
+                    if let Ok(next) = result {
+                        model.push((epoch, payload));
+                        cursors[node] = Some(next);
+                    }
+                }
+            }
+            let (head, records) = journal.recover(1, 0).await?;
+            anyhow::ensure!(
+                head.as_ref().map_or(0, |cursor| cursor.head.position) == model.len() as u64,
+                "head position differs from reference"
+            );
+            anyhow::ensure!(
+                records.len() == model.len(),
+                "committed record count differs from reference"
+            );
+            for (index, (record, expected)) in records.iter().zip(&model).enumerate() {
+                anyhow::ensure!(
+                    record.position == index as u64 + 1
+                        && record.owner_epoch == expected.0
+                        && record.payload == expected.1,
+                    "recovered record {index} differs from reference"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -926,6 +1170,89 @@ mod tests {
             b"committed-checkpoint\n"
         );
         fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_races_preserve_winning_contents_and_vector() -> Result<()> {
+        // Exercise both a stale conditional update and an ambiguous successful
+        // update overtaken before readback. Also try reusing a checkpoint ID.
+        for after_commit in [false, true] {
+            for reuse_id in [false, true] {
+                let journal = ConditionalJournal::memory();
+                let root = std::env::temp_dir()
+                    .join(format!("highwater-checkpoint-race-{}", Uuid::new_v4()));
+                let result = checkpoint_race(&journal, &root, after_commit, reuse_id).await;
+                let _ = fs::remove_dir_all(&root);
+                result
+                    .with_context(|| format!("after_commit={after_commit}, reuse_id={reuse_id}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn checkpoint_race(
+        journal: &ConditionalJournal,
+        root: &FsPath,
+        after_commit: bool,
+        reuse_id: bool,
+    ) -> Result<()> {
+        let first_source = root.join("first");
+        let second_source = root.join("second");
+        fs::create_dir_all(&first_source)?;
+        fs::create_dir_all(&second_source)?;
+        fs::write(first_source.join("CURRENT"), b"first snapshot")?;
+        fs::write(second_source.join("CURRENT"), b"second snapshot")?;
+        let pause = Arc::new(HeadResponsePause::default());
+        if after_commit {
+            *journal.checkpoint_after_pause.lock().unwrap() = Some(pause.clone());
+            journal.inject_ambiguous_checkpoint_commit();
+        } else {
+            *journal.checkpoint_before_pause.lock().unwrap() = Some(pause.clone());
+        }
+        let writer = journal.clone();
+        let first = tokio::spawn(async move {
+            writer
+                .publish_checkpoint(&checkpoint_manifest("first", 1), &first_source)
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            pause.committed.notified(),
+        )
+        .await?;
+        let winning = checkpoint_manifest(if reuse_id { "first" } else { "second" }, 2);
+        let published = journal.publish_checkpoint(&winning, &second_source).await;
+        pause.resume.notify_one();
+        let first_result = tokio::time::timeout(std::time::Duration::from_secs(5), first).await??;
+        published?;
+        anyhow::ensure!(
+            first_result.is_err(),
+            "different checkpoint contents incorrectly acknowledged as this publication"
+        );
+        let (current, _) = journal.read_remote_checkpoint().await?.expect("checkpoint");
+        anyhow::ensure!(
+            current.manifest.shard_sequences == winning.shard_sequences,
+            "checkpoint vector regressed"
+        );
+        let restored = root.join("restored");
+        anyhow::ensure!(
+            journal.restore_latest_checkpoint(&restored).await?,
+            "checkpoint disappeared"
+        );
+        anyhow::ensure!(
+            fs::read(restored.join("CURRENT"))? == b"second snapshot",
+            "restored losing checkpoint contents"
+        );
+        let mut regressing = checkpoint_manifest("regression", 1);
+        regressing.shard_sequences.insert(1, 100);
+        anyhow::ensure!(
+            journal
+                .publish_checkpoint(&regressing, &second_source)
+                .await
+                .is_err(),
+            "larger total position masked a regressing partition"
+        );
         Ok(())
     }
 }

@@ -32,7 +32,7 @@ pub(crate) fn promote_process_outputs(app: &AppState, selected_sink: Option<&str
     if pending.is_empty() {
         return Ok(());
     }
-    app.commit(|transaction| {
+    app.commit_output(0, |transaction| {
         for (_, pending) in &pending {
             let key = outbox_key(&pending.message.sink, &pending.message.message_id);
             if let Some(existing) = transaction.get::<OutboxMessage>(&key)? {
@@ -473,11 +473,10 @@ pub(crate) async fn poll_sink(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let shard = usize::try_from(candidate.shard)?;
-    let mut message = None;
-    app.commit_shard(shard, |transaction| {
+    let message = app.commit_output(shard, |transaction| {
         let timestamp = now();
         let Some(mut candidate) = transaction.get::<OutboxMessage>(&candidate_key)? else {
-            return Ok(());
+            return Ok(None);
         };
         if candidate.acked_at.is_none()
             && candidate
@@ -488,9 +487,9 @@ pub(crate) async fn poll_sink(
             candidate.lease_expires = Some(timestamp + request.lease_seconds);
             candidate.delivery_attempt += 1;
             transaction.put(&candidate_key, &candidate)?;
-            message = Some(candidate);
+            return Ok(Some(candidate));
         }
-        Ok(())
+        Ok(None)
     })?;
     Ok(match message {
         Some(message) => Json(message).into_response(),
@@ -510,8 +509,7 @@ pub(crate) async fn ack_sink_message(
         .get::<OutboxMessage>(&key)?
         .ok_or_else(|| anyhow!("outbox message not found: {message_id}"))?;
     let shard = usize::try_from(existing.shard)?;
-    let mut response = None;
-    app.commit_shard(shard, |transaction| {
+    let response = app.commit_output(shard, |transaction| {
         let mut message = transaction
             .get::<OutboxMessage>(&key)?
             .ok_or_else(|| anyhow!("outbox message not found: {message_id}"))?;
@@ -524,10 +522,9 @@ pub(crate) async fn ack_sink_message(
             message.acked_at = Some(now());
             message.lease_owner = None;
             message.lease_expires = None;
-            transaction.put(key, &message)?;
+            transaction.put(&key, &message)?;
         }
-        response = Some(message);
-        Ok(())
+        Ok(message)
     })?;
-    Ok(Json(response.expect("ack committed")))
+    Ok(Json(response))
 }

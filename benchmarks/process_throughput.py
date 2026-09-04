@@ -138,7 +138,13 @@ async def benchmark(
     else:
         await handle.finish(timeout=300)
     finished = time.perf_counter()
+    final = await handle.info()
+    if final["completed"] != events or final.get("failed", 0) or final.get("quarantined", 0):
+        raise RuntimeError(f"benchmark did not successfully complete every event: {final}")
     print(json.dumps({
+        "completed": final["completed"],
+        "failed": final.get("failed", 0),
+        "quarantined": final.get("quarantined", 0),
         "events": events,
         "publishers": publishers,
         "batch_size": batch_size,

@@ -117,6 +117,28 @@ impl AppState {
             u32::try_from(self.shard_locks.len() - 1).unwrap(),
         ) as usize
     }
+
+    // Only use for replayable operations with no effects outside the transaction.
+    // Rebuild mutations from synchronized state; never retry a stale mutation list.
+    pub(crate) fn commit_output<F, T>(&self, shard: usize, mut operation: F) -> Result<T>
+    where
+        F: FnMut(&mut Transaction<'_>) -> Result<T>,
+    {
+        for attempt in 0..8 {
+            let mut result = None;
+            match self.commit_shard(shard, |transaction| {
+                result = Some(operation(transaction)?);
+                Ok(())
+            }) {
+                Ok(()) => return Ok(result.expect("output transaction committed")),
+                Err(error)
+                    if attempt < 7
+                        && error.to_string().contains("conditional append was fenced") => {}
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("last attempt returns its result")
+    }
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {

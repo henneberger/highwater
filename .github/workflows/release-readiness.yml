@@ -31,6 +31,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
+          cargo build --locked --package highwater-server
           cargo build --release --locked --package highwater-server
       - name: Validate Python and application workloads
         run: PYTHONPATH=src python -m unittest discover -s tests -v

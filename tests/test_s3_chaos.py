@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import shutil
 import socket
 import subprocess
+import sys
+import threading
 import tempfile
 import time
 import unittest
@@ -58,6 +61,97 @@ def request_json(
     "set HIGHWATER_S3_CHAOS=1 to run the multi-process S3 failure test",
 )
 class S3ChaosTest(unittest.TestCase):
+    def test_live_workers_and_ingestion_survive_both_core_failures(self) -> None:
+        from highwater import Client
+        from highwater.client import ProcessHandle
+
+        a_public, a_execution, b_public, b_execution = (free_port() for _ in range(4))
+        node_a = self._start_node("ha-a", a_public, a_execution)
+        self._wait_for_owners(a_public, "ha-a")
+        node_b = self._start_node("ha-b", b_public, b_execution)
+        self._wait_for_owners(b_public, "ha-a")
+
+        status, detail = request_json("POST", f"http://127.0.0.1:{a_public}/streams", {"name": "ha-input"})
+        self.assertEqual(status, 201, detail)
+        status, detail = request_json("POST", f"http://127.0.0.1:{a_public}/processes", {
+            "process_id": "ha-counter", "stream": "ha-input", "workflow_type": "HACounter",
+            "state_version": 1, "build_id": "chaos-v1", "task_queue": "default",
+            "event_time_gate": "immediate", "direct_ingress": True,
+            "max_attempts": 10, "batch_max_size": 4, "batch_max_delay": 0,
+        })
+        self.assertIn(status, (200, 201), detail)
+        workers = []
+        for name, port in (("a", a_execution), ("b", b_execution)):
+            log = (self.root / f"worker-{name}.log").open("ab")
+            worker = subprocess.Popen([
+                sys.executable, "-m", "highwater.rust_worker", "ha_workload",
+                "--target", f"http://127.0.0.1:{port}", "--process-only",
+                "--task-queue", "default", "--process-partitions", "1,2",
+            ], cwd=ROOT, env={**os.environ,
+                "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT / "tests"))),
+                "HIGHWATER_EXECUTION_TOKEN": self.execution_token,
+            }, stdout=log, stderr=subprocess.STDOUT)
+            self.processes.append((worker, log))
+            workers.append(worker)
+
+        def publish_during_failure(port: int, victim: subprocess.Popen[bytes], first: int) -> None:
+            admitted = threading.Event()
+            errors = []
+
+            async def publish() -> None:
+                client = Client(f"http://127.0.0.1:{port}")
+                handle = ProcessHandle(client, "ha-counter", "ha-input", key_field="key", direct_ingress=True)
+                for event in range(first, first + 48):
+                    await handle.send({"key": f"key-{event % 4}", "delta": 1},
+                                      event_id=f"event-{event}", event_time=event)
+                    if event == first + 7:
+                        admitted.set()
+                    await asyncio.sleep(0.02)
+
+            def run() -> None:
+                try:
+                    asyncio.run(asyncio.wait_for(publish(), timeout=90))
+                except BaseException as error:
+                    errors.append(error)
+                    admitted.set()
+
+            publisher = threading.Thread(target=run, daemon=True)
+            publisher.start()
+            self.assertTrue(admitted.wait(30), "publisher failed to admit initial events")
+            if errors:
+                raise errors[0]
+            victim.kill()
+            victim.wait(timeout=10)
+            publisher.join(timeout=95)
+            self.assertFalse(publisher.is_alive(), "ingestion failed to recover")
+            if errors:
+                raise errors[0]
+
+        publish_during_failure(b_public, node_a, 0)
+        self._wait_for_owners(b_public, "ha-b", minimum_epoch=2)
+        replacement = self._start_node("ha-a-replacement", a_public, a_execution)
+        self._wait_for_owners(a_public, "ha-b", minimum_epoch=2)
+        publish_during_failure(a_public, node_b, 48)
+        self._wait_for_owners(a_public, "ha-a-replacement", minimum_epoch=3)
+
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            status, process = request_json("GET", f"http://127.0.0.1:{a_public}/processes/ha-counter")
+            self.assertEqual(status, 200, process)
+            self.assertEqual(process["failed"], 0, process)
+            if process["completed"] == 96:
+                break
+            self.assertTrue(all(worker.poll() is None for worker in workers), "worker exited during failover")
+            time.sleep(0.1)
+        else:
+            self.fail(f"HA workload failed to drain: {process}")
+        for key in range(4):
+            status, state = request_json("GET", f"http://127.0.0.1:{a_public}/processes/ha-counter/keys/key-{key}")
+            self.assertEqual(status, 200, state)
+            self.assertEqual(state["state"], {"total": 24})
+        self.assertIsNone(replacement.poll())
+        self.assertTrue(all(worker.poll() is None for worker in workers))
+
     def setUp(self) -> None:
         subprocess.run(
             ["cargo", "build", "--release", "-p", "highwater-server"],

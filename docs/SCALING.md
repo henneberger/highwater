@@ -8,7 +8,7 @@ Each key hashes to a WAL lane. A lane is a serial durability boundary, while dif
 
 Ready executions carry their input and prior state, and leases carry the complete activation batch. An executor crash therefore needs no reconstruction from transient application memory. Success commits state, output, lease removal, active-key release, and the next mailbox dispatch together. Failure or lease revocation leaves the prior state intact and makes the same durable input runnable again. Application execution already spreads across independent processes or hosts using disjoint partition assignments; every renewal and completion is fenced by the current durable partition-owner epoch and activation sequence.
 
-Checkpoints publish a vector of per-lane positions before deleting covered WAL objects. Controlled compaction follows checkpoint publication, bounding file count and read amplification without putting compaction on every acknowledgement path.
+Checkpoints publish a vector of per-lane positions before deleting covered local WAL segments. Controlled compaction follows checkpoint publication. Remote journal objects and pending output markers are retained conservatively until safe garbage collection is implemented.
 
 ## Multi-host data plane
 
@@ -30,6 +30,12 @@ Warm targets may subscribe to an overlapping desired partition set before moveme
 Adding machines then means reassigning fenced key groups and their checkpoint handles, not changing user code or introducing a topology API. A 10x load increase is handled by more independently owned lanes until a single hot key becomes the limit; one key remains intentionally serial to preserve its state semantics.
 
 ## Safety bar
+
+The Kubernetes reference topology now gives both cores overlapping eligibility
+for every process partition and exposes both through the public Service. Each core
+has its own worker pool polling all partitions; standby cores return no work until
+they acquire ownership. See [High availability](HIGH_AVAILABILITY.md) for the
+live-worker failover drill and the boundaries of the validated direct-ingress path.
 
 Performance work may change encoding, batching, caches, or transport, but not these invariants:
 

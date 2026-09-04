@@ -1393,7 +1393,8 @@ pub(crate) async fn admit_process_records(
             .store
             .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
             .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
-        if owner.owner == app.runtime_id && owner.status == "ACTIVE" {
+        if owner.owner == app.runtime_id && owner.status == "ACTIVE" && owner.lease_expires > now()
+        {
             let sender = app
                 .partition_senders
                 .get(shard)
@@ -1412,7 +1413,7 @@ pub(crate) async fn admit_process_records(
             receivers.push(receiver);
             continue;
         }
-        if owner.status != "ACTIVE" || owner.endpoint.is_empty() {
+        if owner.status != "ACTIVE" || owner.endpoint.is_empty() || owner.lease_expires <= now() {
             return Err(ApiError(
                 StreamCapacityError(format!("process partition {shard} is moving")).into(),
             ));
@@ -1433,11 +1434,28 @@ pub(crate) async fn admit_process_records(
             ))
             .bearer_auth(token)
             .json(&RemoteProcessIngressRequest { records, detailed })
+            .timeout(std::time::Duration::from_secs(5))
             .send()
-            .await?;
+            .await
+            .map_err(|error| {
+                ApiError(
+                    StreamCapacityError(format!(
+                        "process partition {shard} owner is unavailable: {error}"
+                    ))
+                    .into(),
+                )
+            })?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+                return Err(ApiError(
+                    StreamCapacityError(format!(
+                        "process partition {shard} owner is temporarily unavailable: {body}"
+                    ))
+                    .into(),
+                ));
+            }
             return Err(ApiError(anyhow!(
                 "remote partition {shard} rejected ingress with {status}: {body}"
             )));
@@ -1479,7 +1497,9 @@ pub(crate) async fn append_remote_process_records(
         .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
         .ok_or_else(|| anyhow!("process partition {partition} is unassigned"))?;
     if owner.owner != app.runtime_id || owner.status != "ACTIVE" {
-        return Err(ApiError(anyhow!("process partition {partition} is fenced")));
+        return Err(ApiError(
+            StreamCapacityError(format!("process partition {partition} ownership changed")).into(),
+        ));
     }
     let sender = app.partition_senders[shard]
         .as_ref()
@@ -1648,6 +1668,17 @@ pub(crate) fn poll_process_partition(
     let data_shards = app.shard_locks.len().saturating_sub(1).max(1);
     let mut activation_batch = None;
     app.commit_shard(shard, |transaction| {
+        // Standby cores may materialize ready records, but must not issue grants
+        // until a conditional ownership transition makes them authoritative.
+        let owner =
+            transaction.get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?;
+        if owner.as_ref().is_none_or(|owner| {
+            owner.owner != app.runtime_id
+                || owner.status != "ACTIVE"
+                || owner.lease_expires <= now()
+        }) {
+            return Ok(());
+        }
         let timestamp = now();
         let ready = transaction
             .scan_limit::<ProcessReadyExecution>(&process_ready_prefix(shard), 16_384)?;

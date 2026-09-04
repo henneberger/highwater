@@ -16,6 +16,7 @@ metadata:
   name: highwater-core-a
 spec:
   replicas: 1
+  strategy: {type: Recreate}
   selector:
     matchLabels: {app: highwater-core, node: a}
   template:
@@ -44,19 +45,26 @@ spec:
               --state-dir /var/lib/highwater/state
               --object-store-dir /var/lib/highwater/objects
               --journal "$(cat /config/journal-uri)"
-              --node-id core-a
+              --node-id "core-a-${POD_UID}"
               --advertise-endpoint http://highwater-core-a:7234
-              --process-partitions 1,3
+              --process-partitions 1,2,3,4
               --log-shards 5
               --api-token-file /secrets/api/token
               --cluster-token-file /secrets/cluster/token
               --execution-identity-file /secrets/execution/identities.json
+          env:
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
           ports:
             - {name: public, containerPort: 7233}
             - {name: execution, containerPort: 7234}
           readinessProbe:
             httpGet: {path: /health, port: public}
             periodSeconds: 5
+          startupProbe:
+            httpGet: {path: /health, port: public}
+            periodSeconds: 5
+            failureThreshold: 120
           livenessProbe:
             httpGet: {path: /health, port: public}
             periodSeconds: 15
@@ -88,6 +96,7 @@ metadata:
   name: highwater-core-b
 spec:
   replicas: 1
+  strategy: {type: Recreate}
   selector:
     matchLabels: {app: highwater-core, node: b}
   template:
@@ -116,20 +125,26 @@ spec:
               --state-dir /var/lib/highwater/state
               --object-store-dir /var/lib/highwater/objects
               --journal "$(cat /config/journal-uri)"
-              --node-id core-b
+              --node-id "core-b-${POD_UID}"
               --advertise-endpoint http://highwater-core-b:7234
-              --data-plane-only
-              --process-partitions 2,4
+              --process-partitions 1,2,3,4
               --log-shards 5
               --api-token-file /secrets/api/token
               --cluster-token-file /secrets/cluster/token
               --execution-identity-file /secrets/execution/identities.json
+          env:
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
           ports:
             - {name: public, containerPort: 7233}
             - {name: execution, containerPort: 7234}
           readinessProbe:
             httpGet: {path: /health, port: public}
             periodSeconds: 5
+          startupProbe:
+            httpGet: {path: /health, port: public}
+            periodSeconds: 5
+            failureThreshold: 120
           livenessProbe:
             httpGet: {path: /health, port: public}
             periodSeconds: 15
@@ -176,7 +191,7 @@ apiVersion: v1
 kind: Service
 metadata: {name: highwater-public}
 spec:
-  selector: {app: highwater-core, node: a}
+  selector: {app: highwater-core}
   ports:
     - {name: public, port: 7233, targetPort: public}
 ---
@@ -208,6 +223,12 @@ spec:
     metadata:
       labels: {app: highwater-application-worker, owner: a}
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: highwater-application-worker, owner: b}
+              topologyKey: kubernetes.io/hostname
       runtimeClassName: gvisor
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -221,7 +242,7 @@ spec:
       containers:
         - name: application
           image: APPLICATION_IMAGE
-          args: ["app", "--process-only", "--task-queue", "APPLICATION_TASK_QUEUE", "--target", "http://highwater-core-a:7234", "--process-partitions", "1,3"]
+          args: ["app", "--process-only", "--task-queue", "APPLICATION_TASK_QUEUE", "--target", "http://highwater-core-a:7234", "--process-partitions", "1,2,3,4"]
           env:
             - name: HIGHWATER_EXECUTION_TOKEN
               valueFrom:
@@ -251,6 +272,12 @@ spec:
     metadata:
       labels: {app: highwater-application-worker, owner: b}
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: highwater-application-worker, owner: a}
+              topologyKey: kubernetes.io/hostname
       runtimeClassName: gvisor
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -264,7 +291,7 @@ spec:
       containers:
         - name: application
           image: APPLICATION_IMAGE
-          args: ["app", "--process-only", "--task-queue", "APPLICATION_TASK_QUEUE", "--target", "http://highwater-core-b:7234", "--process-partitions", "2,4"]
+          args: ["app", "--process-only", "--task-queue", "APPLICATION_TASK_QUEUE", "--target", "http://highwater-core-b:7234", "--process-partitions", "1,2,3,4"]
           env:
             - name: HIGHWATER_EXECUTION_TOKEN
               valueFrom:
@@ -324,9 +351,9 @@ spec:
             - --target
             - http://highwater-public:7233
             - --partitions
-            - "2"
+            - "4"
             - --min-replicas
-            - "0"
+            - "1"
             - --max-replicas
             - "2"
             - --watch
@@ -366,9 +393,9 @@ spec:
             - --target
             - http://highwater-public:7233
             - --partitions
-            - "2"
+            - "4"
             - --min-replicas
-            - "0"
+            - "1"
             - --max-replicas
             - "2"
             - --watch

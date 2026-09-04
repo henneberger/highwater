@@ -4,6 +4,36 @@ use highwater_protocol::ProcessBatchResult;
 const EVENTS: usize = 12;
 const KEYS: usize = 3;
 
+#[test]
+fn standby_poll_does_not_grant_another_owners_ready_work() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.admit()?;
+    let mut standby = fixture.app().clone();
+    standby.runtime_id = "standby".to_owned();
+    let request = || {
+        serde_json::from_value::<PollRequest>(json!({
+            "protocol_version": PROTOCOL_VERSION, "worker_id": "worker", "build_ids": ["v1"]
+        }))
+    };
+    anyhow::ensure!(
+        poll_process_partition(&standby, 1, request()?)?.is_none(),
+        "standby granted work"
+    );
+    anyhow::ensure!(
+        fixture
+            .app()
+            .store
+            .scan::<ProcessBatchLease>(process_batch_lease_prefix())?
+            .is_empty(),
+        "standby created a lease"
+    );
+    anyhow::ensure!(
+        poll_process_partition(fixture.app(), 1, request()?)?.is_some(),
+        "owner could not execute its ready work"
+    );
+    Ok(())
+}
+
 struct Fixture {
     root: PathBuf,
     app: Option<AppState>,

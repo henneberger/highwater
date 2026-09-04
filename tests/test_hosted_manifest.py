@@ -40,7 +40,14 @@ class HostedManifestTest(unittest.TestCase):
             self.assertIn("fsGroup: 65532", manifest)
             self.assertIn("readOnlyRootFilesystem: true", manifest)
             self.assertIn("runtimeClassName: gvisor", manifest)
-            self.assertIn('--min-replicas\n            - "0"', manifest)
+            self.assertEqual(manifest.count('--min-replicas\n            - "1"'), 2)
+            self.assertEqual(manifest.count('--process-partitions 1,2,3,4'), 2)
+            self.assertEqual(manifest.count('"--process-partitions", "1,2,3,4"'), 2)
+            self.assertNotIn('--data-plane-only', manifest)
+            self.assertEqual(manifest.count('fieldPath: metadata.uid'), 2)
+            self.assertEqual(manifest.count('startupProbe:'), 2)
+            self.assertEqual(manifest.count('strategy: {type: Recreate}'), 2)
+            self.assertIn('metadata: {name: highwater-public}\nspec:\n  selector: {app: highwater-core}', manifest)
 
     def test_renderer_rejects_mutable_image_tags(self) -> None:
         result = subprocess.run([

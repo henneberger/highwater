@@ -32,13 +32,18 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = if self.0.downcast_ref::<WatermarkAlignmentError>().is_some()
+        let message = format!("{:#}", self.0);
+        let status = if message.contains("conditional append was fenced")
+            || message.starts_with("process partition ") && message.contains(" is fenced at epoch ")
+        {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else if self.0.downcast_ref::<WatermarkAlignmentError>().is_some()
             || self.0.downcast_ref::<StreamCapacityError>().is_some()
         {
             StatusCode::TOO_MANY_REQUESTS
         } else {
             StatusCode::BAD_REQUEST
         };
-        (status, Json(json!({"error": format!("{:#}", self.0)}))).into_response()
+        (status, Json(json!({"error": message}))).into_response()
     }
 }

@@ -52,6 +52,20 @@ def _duration(value: float | timedelta | None) -> float | None:
     return value
 
 
+def _http_failure(error: HTTPError) -> Exception:
+    try:
+        try:
+            payload = json.loads(error.read() or b"{}")
+        except (ValueError, UnicodeError):
+            payload = {}
+        message = payload.get("error", str(error)) if isinstance(payload, dict) else str(error)
+        if error.code in (429, 502, 503, 504):
+            return StreamBackpressure(message)
+        return RuntimeError(message)
+    finally:
+        error.close()
+
+
 class WorkflowHandle:
     def __init__(self, client: "Client", workflow_id: str) -> None:
         self.client = client
@@ -474,11 +488,7 @@ class Client:
                 with urlopen(request, timeout=15) as response:
                     return json.loads(response.read() or b"null")
             except HTTPError as error:
-                payload = json.loads(error.read() or b"{}")
-                error.close()
-                if error.code == 429:
-                    raise StreamBackpressure(payload.get("error", str(error))) from error
-                raise RuntimeError(payload.get("error", str(error))) from error
+                raise _http_failure(error) from error
 
         return await asyncio.to_thread(send)
 
@@ -494,11 +504,7 @@ class Client:
                 with urlopen(request, timeout=30) as response:
                     return json.loads(response.read() or b"null")
             except HTTPError as error:
-                payload = json.loads(error.read() or b"{}")
-                error.close()
-                if error.code == 429:
-                    raise StreamBackpressure(payload.get("error", str(error))) from error
-                raise RuntimeError(payload.get("error", str(error))) from error
+                raise _http_failure(error) from error
 
         return await asyncio.to_thread(send)
 

@@ -66,6 +66,7 @@ pub(crate) fn start_process_workflow(
     process: &DurableProcess,
     item: &ProcessMailboxItem,
 ) -> Result<ProcessExecution> {
+    ensure_pending_process_outcome(transaction, &process.process_id, &item.key, &item.record)?;
     let workflow_id = format!(
         "process/{}/{}/{:020}",
         process.process_id,
@@ -209,6 +210,7 @@ pub(crate) fn refresh_processes(
                 .clone()
                 .filter(|key| !key.is_empty())
                 .ok_or_else(|| anyhow!("process input records require a non-empty key"))?;
+            ensure_pending_process_outcome(transaction, &process.process_id, &key, record)?;
             let item = ProcessMailboxItem {
                 process_id: process.process_id.clone(),
                 sequence: record.sequence,
@@ -231,11 +233,144 @@ pub(crate) fn refresh_processes(
     Ok(())
 }
 
+fn process_event_id(record: &StreamRecord) -> String {
+    record.event_id.clone().unwrap_or_else(|| {
+        format!(
+            "stream:{}:{}:{}",
+            record.stream, record.partition, record.offset
+        )
+    })
+}
+
+fn ensure_pending_process_outcome(
+    transaction: &mut Transaction<'_>,
+    process_id: &str,
+    key: &str,
+    record: &StreamRecord,
+) -> Result<()> {
+    let event_id = process_event_id(record);
+    let storage_key = process_outcome_key(process_id, key, &event_id);
+    if let Some(existing) = transaction.get::<ProcessExecutionOutcome>(&storage_key)? {
+        if existing.sequence != record.sequence {
+            bail!("event_id was already used with different process event contents");
+        }
+        return Ok(());
+    }
+    transaction.put(
+        storage_key,
+        &ProcessExecutionOutcome {
+            process_id: process_id.to_owned(),
+            event_id,
+            key: key.to_owned(),
+            sequence: record.sequence,
+            status: "PENDING".to_owned(),
+            attempts: 0,
+            output_message_ids: Vec::new(),
+            failure: None,
+            admitted_at: record.ingestion_time,
+            updated_at: record.ingestion_time,
+        },
+    )
+}
+
+pub(crate) struct ProcessOutcomeUpdate {
+    pub(crate) status: &'static str,
+    pub(crate) attempts: u32,
+    pub(crate) output_message_ids: Vec<String>,
+    pub(crate) failure: Option<String>,
+}
+
+pub(crate) fn update_process_outcome(
+    transaction: &mut Transaction<'_>,
+    process_id: &str,
+    key: &str,
+    record: &StreamRecord,
+    update: ProcessOutcomeUpdate,
+) -> Result<()> {
+    ensure_pending_process_outcome(transaction, process_id, key, record)?;
+    let event_id = process_event_id(record);
+    let storage_key = process_outcome_key(process_id, key, &event_id);
+    let mut outcome = transaction
+        .get::<ProcessExecutionOutcome>(&storage_key)?
+        .ok_or_else(|| anyhow!("process execution outcome missing"))?;
+    if outcome.status != "PENDING" && outcome.status != update.status {
+        bail!(
+            "process event {} already reached terminal status {}",
+            outcome.event_id,
+            outcome.status
+        );
+    }
+    outcome.status = update.status.to_owned();
+    outcome.attempts = update.attempts;
+    outcome.output_message_ids = update.output_message_ids;
+    outcome.failure = update.failure;
+    outcome.updated_at = now();
+    transaction.put(storage_key, &outcome)
+}
+
+fn enqueue_process_output(
+    transaction: &mut Transaction<'_>,
+    shard: u32,
+    process_id: &str,
+    key: &str,
+    record: &StreamRecord,
+    output: &Value,
+) -> Result<String> {
+    let sink = format!("process:{process_id}");
+    let message_id = format!("process:{process_id}:{}", record.sequence);
+    let storage_key = outbox_key(&sink, &message_id);
+    let message = OutboxMessage {
+        sink,
+        message_id: message_id.clone(),
+        shard: 0,
+        workflow_id: process_id.to_owned(),
+        payload: json!({
+            "process_id": process_id,
+            "event_id": process_event_id(record),
+            "key": key,
+            "input_sequence": record.sequence,
+            "event_time": record.event_time,
+            "value": output,
+        }),
+        created_at: now(),
+        lease_owner: None,
+        lease_expires: None,
+        delivery_attempt: 0,
+        acked_at: None,
+    };
+    if shard == 0 {
+        if let Some(existing) = transaction.get::<OutboxMessage>(&storage_key)? {
+            if existing.message_id != message.message_id || existing.payload != message.payload {
+                bail!("process output message identity collision");
+            }
+        } else {
+            transaction.put(storage_key, &message)?;
+        }
+    } else {
+        let pending_key = pending_process_output_key(shard, &message_id);
+        let pending = PendingProcessOutput {
+            source_shard: shard,
+            message,
+        };
+        if let Some(existing) = transaction.get::<PendingProcessOutput>(&pending_key)? {
+            if existing.message.message_id != pending.message.message_id
+                || existing.message.payload != pending.message.payload
+            {
+                bail!("pending process output identity collision");
+            }
+        } else {
+            transaction.put(pending_key, &pending)?;
+        }
+    }
+    Ok(message_id)
+}
+
 pub(crate) fn finish_process_execution(
     transaction: &mut Transaction<'_>,
     workflow_id: &str,
     status: &str,
     result: Option<&Value>,
+    failure: Option<&str>,
 ) -> Result<()> {
     let execution_key = process_execution_key(workflow_id);
     let Some(execution) = transaction.get::<ProcessExecution>(&execution_key)? else {
@@ -252,6 +387,7 @@ pub(crate) fn finish_process_execution(
     } else {
         process.retrying = process.retrying.saturating_sub(1);
     }
+    let mut output_message_ids = Vec::new();
     if status == "COMPLETED" {
         let returned = result.cloned().unwrap_or(Value::Null);
         let transition = returned
@@ -311,7 +447,27 @@ pub(crate) fn finish_process_execution(
                 )?;
             }
             transaction.put(output_key, &output)?;
+            output_message_ids.push(enqueue_process_output(
+                transaction,
+                0,
+                &execution.process_id,
+                &execution.key,
+                &execution.record,
+                &output,
+            )?);
         }
+        update_process_outcome(
+            transaction,
+            &execution.process_id,
+            &execution.key,
+            &execution.record,
+            ProcessOutcomeUpdate {
+                status: "COMMITTED",
+                attempts: execution.attempt,
+                output_message_ids,
+                failure: None,
+            },
+        )?;
         process.completed += 1;
         if process.discard_input_on_success {
             transaction.delete(stream_record_key(
@@ -328,6 +484,18 @@ pub(crate) fn finish_process_execution(
             transaction.delete(workflow_key(workflow_id));
         }
     } else {
+        update_process_outcome(
+            transaction,
+            &execution.process_id,
+            &execution.key,
+            &execution.record,
+            ProcessOutcomeUpdate {
+                status: "FAILED",
+                attempts: execution.attempt.max(1),
+                output_message_ids: Vec::new(),
+                failure: Some(failure.unwrap_or(status).to_owned()),
+            },
+        )?;
         process.failed += 1;
     }
     if transaction.defer_process_dispatch {
@@ -408,6 +576,75 @@ pub(crate) fn process_failure_disposition(
     } else {
         ProcessFailureDisposition::Retry
     }
+}
+
+pub(crate) fn retry_or_quarantine_sharded_execution(
+    transaction: &mut Transaction<'_>,
+    process: &DurableProcess,
+    shard: usize,
+    mut ready_execution: ProcessReadyExecution,
+    failure: String,
+    shard_state: &mut ProcessShardState,
+) -> Result<()> {
+    let execution = &mut ready_execution.execution;
+    release_process_execution(shard_state, execution.isolated_retry);
+    execution.attempt = execution.attempt.saturating_add(1);
+    execution.last_failure = Some(failure.clone());
+    if process_failure_disposition(execution.attempt, process.max_attempts)
+        == ProcessFailureDisposition::Quarantine
+    {
+        transaction.put(
+            process_quarantine_key(&process.process_id, shard, execution.sequence),
+            &ProcessQuarantineRecord {
+                process_id: process.process_id.clone(),
+                key: execution.key.clone(),
+                sequence: execution.sequence,
+                event_time: execution.event_time,
+                record: execution.record.clone(),
+                attempts: execution.attempt,
+                failure: failure.clone(),
+                quarantined_at: now(),
+            },
+        )?;
+        update_process_outcome(
+            transaction,
+            &execution.process_id,
+            &execution.key,
+            &execution.record,
+            ProcessOutcomeUpdate {
+                status: "FAILED",
+                attempts: execution.attempt,
+                output_message_ids: Vec::new(),
+                failure: Some(failure),
+            },
+        )?;
+        shard_state.active_keys.remove(&execution.key);
+        shard_state.failed += 1;
+        shard_state.quarantined += 1;
+    } else {
+        execution.isolated_retry = true;
+        execution.available_at =
+            now() + (0.1 * 2f64.powi((execution.attempt.saturating_sub(1)) as i32)).min(5.0);
+        execution.enqueued_at = execution.available_at;
+        update_process_outcome(
+            transaction,
+            &execution.process_id,
+            &execution.key,
+            &execution.record,
+            ProcessOutcomeUpdate {
+                status: "PENDING",
+                attempts: execution.attempt,
+                output_message_ids: Vec::new(),
+                failure: Some(failure),
+            },
+        )?;
+        transaction.put(
+            process_ready_key(shard, &process.process_id, execution.sequence),
+            &ready_execution,
+        )?;
+        shard_state.retry_pending += 1;
+    }
+    Ok(())
 }
 
 fn start_sharded_process_execution(
@@ -494,6 +731,7 @@ pub(crate) fn finish_sharded_process_execution(
             value: next_state,
         },
     )?;
+    let mut output_message_ids = Vec::new();
     if let Some(output) = transition.get("emit").filter(|value| !value.is_null()) {
         let output_key = process_output_key(&execution.process_id, &execution.key);
         let prior_output = transaction.get::<Value>(&output_key)?;
@@ -537,22 +775,27 @@ pub(crate) fn finish_sharded_process_execution(
                 )?;
             }
         }
-        transaction.put(
-            format!(
-                "process-outbox/{}/{:04}/{:020}",
-                encoded(&execution.process_id),
-                execution.shard,
-                input_sequence
-            ),
-            &json!({
-                "process_id": execution.process_id,
-                "key": execution.key,
-                "input_sequence": input_sequence,
-                "event_time": execution.event_time,
-                "value": output,
-            }),
-        )?;
+        output_message_ids.push(enqueue_process_output(
+            transaction,
+            execution.shard,
+            &execution.process_id,
+            &execution.key,
+            &execution.record,
+            output,
+        )?);
     }
+    update_process_outcome(
+        transaction,
+        &execution.process_id,
+        &execution.key,
+        &execution.record,
+        ProcessOutcomeUpdate {
+            status: "COMMITTED",
+            attempts: execution.attempt,
+            output_message_ids,
+            failure: None,
+        },
+    )?;
     shard_state.active_keys.remove(&execution.key);
     release_process_execution(shard_state, execution.isolated_retry);
     shard_state.completed += 1;
@@ -611,6 +854,7 @@ pub(crate) async fn create_process(
         mailbox_capacity: request.mailbox_capacity,
         retry_concurrency: request.retry_concurrency,
         max_attempts: request.max_attempts,
+        direct_ingress: request.direct_ingress,
         discard_input_on_success: request.discard_input_on_success,
         batch_max_size: request.batch_max_size,
         batch_max_delay: request.batch_max_delay,
@@ -658,6 +902,7 @@ pub(crate) async fn create_process(
                 && existing.key_field == process.key_field
                 && existing.event_time_field == process.event_time_field
                 && existing.event_time_gate == process.event_time_gate
+                && existing.direct_ingress == process.direct_ingress
             {
                 if process.state_version < existing.state_version {
                     bail!(
@@ -707,15 +952,19 @@ pub(crate) async fn create_process(
                 return Ok(());
             }
             bail!(
-                "process {} cannot change its input, workflow, key, event-time field, or gate",
+                "process {} cannot change its input, workflow, key, event-time field, gate, or ingress mode",
                 process.process_id
             );
         }
-        let records = transaction
-            .scan::<StreamRecord>(&stream_record_prefix(&process.stream))?
-            .into_iter()
-            .map(|(_, record)| record)
-            .collect::<Vec<_>>();
+        let records = if process.direct_ingress {
+            Vec::new()
+        } else {
+            transaction
+                .scan::<StreamRecord>(&stream_record_prefix(&process.stream))?
+                .into_iter()
+                .map(|(_, record)| record)
+                .collect::<Vec<_>>()
+        };
         if records.len() as u64 > process.mailbox_capacity {
             return Err(StreamCapacityError(format!(
                 "process {} backfill exceeds mailbox capacity",
@@ -744,10 +993,12 @@ pub(crate) async fn create_process(
         }
         created = true;
         transaction.put(&storage_key, &process)?;
-        transaction.put(
-            process_stream_key(&process.stream, &process.process_id),
-            &process.process_id,
-        )?;
+        if !process.direct_ingress {
+            transaction.put(
+                process_stream_key(&process.stream, &process.process_id),
+                &process.process_id,
+            )?;
+        }
         dispatch_process(transaction, &storage_key, &mut process)
     })?;
     let process = app
@@ -780,9 +1031,8 @@ pub(crate) fn append_process_shard_records(
     let process = transaction
         .get::<DurableProcess>(&process_key(process_id))?
         .ok_or_else(|| anyhow!("process not found: {process_id}"))?;
-    if process.event_time_gate != EventTimeGate::Immediate || !process.versioned_streams.is_empty()
-    {
-        bail!("event-time-gated processes must publish through their input stream");
+    if !process.direct_ingress {
+        bail!("process {process_id} accepts events only through its input stream");
     }
     let state_key = process_shard_state_key(process_id, shard);
     let mut shard_state = transaction
@@ -806,15 +1056,18 @@ pub(crate) fn append_process_shard_records(
             request
                 .event_id
                 .clone()
-                .unwrap_or_else(|| Uuid::new_v4().to_string())
+                .filter(|event_id| !event_id.trim().is_empty())
+                .ok_or_else(|| anyhow!("direct process events require a stable event_id"))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let dedup_keys = event_ids
         .iter()
-        .map(|event_id| {
+        .zip(&event_keys)
+        .map(|(event_id, key)| {
             format!(
-                "process-event/{}/{shard:04}/{}",
+                "process-event/{}/{shard:04}/{}/{}",
                 encoded(process_id),
+                encoded(key),
                 encoded(event_id)
             )
         })
@@ -859,6 +1112,13 @@ pub(crate) fn append_process_shard_records(
             .clone()
             .or_else(|| admitted_dedup.get(dedup_key).cloned());
         if let Some(record) = duplicate {
+            if record.event_time != request.event_time
+                || record.key.as_deref() != Some(key.as_str())
+                || record.value != request.value
+                || record.kind != request.kind
+            {
+                bail!("event_id was already used with different process event contents");
+            }
             result.duplicates += 1;
             if detailed {
                 result.responses.push((
@@ -906,6 +1166,7 @@ pub(crate) fn append_process_shard_records(
             event_time: request.event_time,
             record: record.clone(),
         };
+        ensure_pending_process_outcome(transaction, process_id, key, &record)?;
         admitted_dedup.insert(dedup_key.clone(), record.clone());
         if shard_state.running < concurrency as u64
             && !shard_state.active_keys.contains(key)
@@ -1612,53 +1873,24 @@ pub(crate) fn complete_process_partition(
             .get::<ProcessShardState>(&state_key)?
             .unwrap_or_default();
         for (leased, item) in current_lease.executions.iter().zip(completion.items) {
-            let execution_key = &leased.execution_key;
-            let mut execution = leased.execution.clone();
+            let execution = &leased.execution;
             if execution.shard as usize != shard {
                 bail!("process task lease lost");
             }
             if let Some(failure) = item.failure {
-                release_process_execution(&mut shard_state, execution.isolated_retry);
-                execution.attempt += 1;
-                if process_failure_disposition(execution.attempt, process.max_attempts)
-                    == ProcessFailureDisposition::Quarantine
-                {
-                    transaction.put(
-                        process_quarantine_key(&process_id, shard, execution.sequence),
-                        &ProcessQuarantineRecord {
-                            process_id: process_id.clone(),
-                            key: execution.key.clone(),
-                            sequence: execution.sequence,
-                            event_time: execution.event_time,
-                            record: execution.record.clone(),
-                            attempts: execution.attempt,
-                            failure,
-                            quarantined_at: now(),
-                        },
-                    )?;
-                    shard_state.active_keys.remove(&execution.key);
-                    shard_state.failed += 1;
-                    shard_state.quarantined += 1;
-                } else {
-                    execution.isolated_retry = true;
-                    execution.available_at = now()
-                        + (0.1 * 2f64.powi((execution.attempt.saturating_sub(1)) as i32)).min(5.0);
-                    execution.enqueued_at = execution.available_at;
-                    execution.last_failure = Some(failure);
-                    transaction.put(
-                        process_ready_key(shard, &process_id, execution.sequence),
-                        &ProcessReadyExecution {
-                            execution_key: execution_key.clone(),
-                            execution,
-                        },
-                    )?;
-                    shard_state.retry_pending += 1;
-                }
+                retry_or_quarantine_sharded_execution(
+                    transaction,
+                    &process,
+                    shard,
+                    leased.clone(),
+                    failure,
+                    &mut shard_state,
+                )?;
                 continue;
             }
             finish_sharded_process_execution(
                 transaction,
-                &execution,
+                execution,
                 execution.sequence,
                 item.result.unwrap_or(Value::Null),
                 &mut shard_state,
@@ -1738,6 +1970,7 @@ pub(crate) async fn get_process(
     State(app): State<AppState>,
     Path(process_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    app.store.sync_all_remote()?;
     let mut process = app
         .store
         .get::<DurableProcess>(&process_key(&process_id))?
@@ -1760,6 +1993,7 @@ pub(crate) async fn get_process_quarantine(
     State(app): State<AppState>,
     Path(process_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    app.store.sync_all_remote()?;
     if app
         .store
         .get::<DurableProcess>(&process_key(&process_id))?
@@ -1776,17 +2010,43 @@ pub(crate) async fn get_process_quarantine(
     Ok(Json(records))
 }
 
+pub(crate) async fn get_process_outcome(
+    State(app): State<AppState>,
+    Path((process_id, key, event_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    app.store.sync_remote_shard(0)?;
+    let process = app
+        .store
+        .get::<DurableProcess>(&process_key(&process_id))?
+        .ok_or_else(|| anyhow!("process not found: {process_id}"))?;
+    let shard = if process.direct_ingress {
+        app.process_shard(&key)
+    } else {
+        0
+    };
+    app.store.sync_remote_shard(shard)?;
+    let outcome = app
+        .store
+        .get::<ProcessExecutionOutcome>(&process_outcome_key(&process_id, &key, &event_id))?
+        .ok_or_else(|| anyhow!("process event not found: {event_id}"))?;
+    Ok(Json(outcome))
+}
+
 pub(crate) async fn get_process_state(
     State(app): State<AppState>,
     Path((process_id, key)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if app
+    app.store.sync_remote_shard(0)?;
+    let process = app
         .store
         .get::<DurableProcess>(&process_key(&process_id))?
-        .is_none()
-    {
-        return Err(ApiError(anyhow!("process not found: {process_id}")));
-    }
+        .ok_or_else(|| anyhow!("process not found: {process_id}"))?;
+    let shard = if process.direct_ingress {
+        app.process_shard(&key)
+    } else {
+        0
+    };
+    app.store.sync_remote_shard(shard)?;
     let state = app
         .store
         .get::<ProcessStateRecord>(&process_state_key(&process_id, &key))?;

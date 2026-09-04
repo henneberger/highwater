@@ -294,6 +294,8 @@ pub(crate) struct CreateProcessRequest {
     #[serde(default = "default_process_max_attempts")]
     pub(crate) max_attempts: u32,
     #[serde(default)]
+    pub(crate) direct_ingress: bool,
+    #[serde(default)]
     pub(crate) discard_input_on_success: bool,
     #[serde(default = "default_process_batch_size")]
     pub(crate) batch_max_size: u32,
@@ -361,6 +363,8 @@ pub(crate) struct StreamBatchCommit {
 pub(crate) struct OutboxMessage {
     pub(crate) sink: String,
     pub(crate) message_id: String,
+    #[serde(default)]
+    pub(crate) shard: u32,
     pub(crate) workflow_id: String,
     pub(crate) payload: Value,
     pub(crate) created_at: f64,
@@ -368,6 +372,12 @@ pub(crate) struct OutboxMessage {
     pub(crate) lease_expires: Option<f64>,
     pub(crate) delivery_attempt: u32,
     pub(crate) acked_at: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PendingProcessOutput {
+    pub(crate) source_shard: u32,
+    pub(crate) message: OutboxMessage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -408,6 +418,8 @@ pub(crate) struct DurableProcess {
     pub(crate) retry_concurrency: u32,
     #[serde(default = "default_process_max_attempts")]
     pub(crate) max_attempts: u32,
+    #[serde(default)]
+    pub(crate) direct_ingress: bool,
     #[serde(default)]
     pub(crate) discard_input_on_success: bool,
     pub(crate) batch_max_size: u32,
@@ -519,6 +531,22 @@ pub(crate) struct ProcessQuarantineRecord {
     pub(crate) attempts: u32,
     pub(crate) failure: String,
     pub(crate) quarantined_at: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProcessExecutionOutcome {
+    pub(crate) process_id: String,
+    pub(crate) event_id: String,
+    pub(crate) key: String,
+    pub(crate) sequence: u64,
+    pub(crate) status: String,
+    pub(crate) attempts: u32,
+    #[serde(default)]
+    pub(crate) output_message_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) failure: Option<String>,
+    pub(crate) admitted_at: f64,
+    pub(crate) updated_at: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -675,8 +703,10 @@ pub(crate) struct CheckpointBarrier {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AcknowledgeCheckpointRequest {
-    pub(crate) state_handle: String,
-    pub(crate) key_group_epochs: BTreeMap<u32, u64>,
+    #[serde(rename = "state_handle")]
+    pub(crate) _state_handle: String,
+    #[serde(rename = "key_group_epochs")]
+    pub(crate) _key_group_epochs: BTreeMap<u32, u64>,
 }
 
 #[derive(Debug, Deserialize)]

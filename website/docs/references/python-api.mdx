@@ -25,6 +25,7 @@ orders = await client.get_process_handle("Order")
 | Method | Result |
 | --- | --- |
 | `send(event, *, event_id, event_time=None)` | durable admission receipt |
+| `outcome(key, event_id)` | durable `PENDING`, `COMMITTED`, or `FAILED` execution outcome |
 | `send_many(events)` | receipts in input order |
 | `state(key)` | latest committed Process state |
 | `drain()` | waits for admitted work to finish |

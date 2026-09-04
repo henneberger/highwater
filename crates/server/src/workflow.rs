@@ -308,7 +308,19 @@ pub(crate) async fn poll_workflow(
             })
             .collect();
         candidates.sort_by(|left, right| left.1.available_at.total_cmp(&right.1.available_at));
-        let Some((key, mut task)) = candidates.into_iter().next() else {
+        let mut selected = None;
+        for candidate in candidates {
+            if !record_expired_process_activation(
+                transaction,
+                &candidate.0,
+                &candidate.1,
+                timestamp,
+            )? {
+                selected = Some(candidate);
+                break;
+            }
+        }
+        let Some((key, mut task)) = selected else {
             return Ok(());
         };
         let token = Uuid::new_v4().to_string();
@@ -376,7 +388,18 @@ pub(crate) async fn poll_workflow_batch(
             })
             .collect();
         candidates.sort_by(|left, right| left.1.available_at.total_cmp(&right.1.available_at));
-        let Some((_, first)) = candidates.first() else {
+        let mut eligible = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            if !record_expired_process_activation(
+                transaction,
+                &candidate.0,
+                &candidate.1,
+                timestamp,
+            )? {
+                eligible.push(candidate);
+            }
+        }
+        let Some((_, first)) = eligible.first() else {
             return Ok(());
         };
         let batch_group = first.batch_group.clone();
@@ -387,7 +410,7 @@ pub(crate) async fn poll_workflow_batch(
         } else {
             1
         };
-        let available = candidates
+        let available = eligible
             .iter()
             .filter(|(_, task)| {
                 task.batch_group == batch_group
@@ -401,7 +424,7 @@ pub(crate) async fn poll_workflow_batch(
         {
             return Ok(());
         }
-        for (key, mut task) in candidates
+        for (key, mut task) in eligible
             .into_iter()
             .filter(|(_, task)| {
                 task.batch_group == batch_group
@@ -443,6 +466,82 @@ pub(crate) async fn poll_workflow_batch(
     Ok(Json(activations))
 }
 
+fn record_expired_process_activation(
+    transaction: &mut Transaction<'_>,
+    task_key: &str,
+    task: &WorkflowTask,
+    timestamp: f64,
+) -> Result<bool> {
+    if task.task_token.is_none() || task.lease_expires.is_none_or(|expires| expires > timestamp) {
+        return Ok(false);
+    }
+    let execution_key = process_execution_key(&task.workflow_id);
+    let Some(mut execution) = transaction.get::<ProcessExecution>(&execution_key)? else {
+        return Ok(false);
+    };
+    let storage_key = process_key(&execution.process_id);
+    let mut process = transaction
+        .get::<DurableProcess>(&storage_key)?
+        .ok_or_else(|| anyhow!("process missing: {}", execution.process_id))?;
+    if execution.attempt == 0 {
+        process.running = process.running.saturating_sub(1);
+        process.retrying += 1;
+    }
+    execution.attempt = task.attempt;
+    let failure = "activation lease expired before completion".to_owned();
+    execution.last_failure = Some(failure.clone());
+    transaction.put(&execution_key, &execution)?;
+    if process_failure_disposition(task.attempt, process.max_attempts)
+        == ProcessFailureDisposition::Quarantine
+    {
+        transaction.put(
+            process_quarantine_key(
+                &execution.process_id,
+                execution.shard as usize,
+                execution.record.sequence,
+            ),
+            &ProcessQuarantineRecord {
+                process_id: execution.process_id.clone(),
+                key: execution.key.clone(),
+                sequence: execution.record.sequence,
+                event_time: execution.event_time,
+                record: execution.record.clone(),
+                attempts: task.attempt,
+                failure: failure.clone(),
+                quarantined_at: now(),
+            },
+        )?;
+        process.quarantined += 1;
+        transaction.put(&storage_key, &process)?;
+        if let Some(token) = task.task_token.as_deref() {
+            transaction.delete(workflow_task_token_key(token));
+        }
+        transaction.delete(task_key);
+        close_workflow(
+            transaction,
+            &task.workflow_id,
+            "FAILED",
+            None,
+            Some(failure),
+        )?;
+        return Ok(true);
+    }
+    update_process_outcome(
+        transaction,
+        &execution.process_id,
+        &execution.key,
+        &execution.record,
+        ProcessOutcomeUpdate {
+            status: "PENDING",
+            attempts: task.attempt,
+            output_message_ids: Vec::new(),
+            failure: Some(failure),
+        },
+    )?;
+    transaction.put(storage_key, &process)?;
+    Ok(false)
+}
+
 pub(crate) fn close_workflow(
     transaction: &mut Transaction<'_>,
     id: &str,
@@ -475,6 +574,7 @@ pub(crate) fn close_workflow(
                 &OutboxMessage {
                     sink: "workflows".to_owned(),
                     message_id,
+                    shard: 0,
                     workflow_id: id.to_owned(),
                     payload: workflow.result.clone().unwrap_or(Value::Null),
                     created_at: now(),
@@ -560,7 +660,13 @@ pub(crate) fn close_workflow(
         )?;
         enqueue_workflow(transaction, &parent)?;
     }
-    finish_process_execution(transaction, id, status, workflow.result.as_ref())?;
+    finish_process_execution(
+        transaction,
+        id,
+        status,
+        workflow.result.as_ref(),
+        workflow.error.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -899,6 +1005,18 @@ pub(crate) fn apply_workflow_completion(
             execution.attempt = task.attempt;
             execution.last_failure = Some(failure.clone());
             transaction.put(process_execution_key(&workflow_id), &execution)?;
+            update_process_outcome(
+                transaction,
+                &execution.process_id,
+                &execution.key,
+                &execution.record,
+                ProcessOutcomeUpdate {
+                    status: "PENDING",
+                    attempts: task.attempt,
+                    output_message_ids: Vec::new(),
+                    failure: Some(failure.clone()),
+                },
+            )?;
             if process_failure_disposition(task.attempt, process.max_attempts)
                 == ProcessFailureDisposition::Quarantine
             {

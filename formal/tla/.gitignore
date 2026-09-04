@@ -1,0 +1,3 @@
+*.bin
+*_TTrace_*.tla
+states/

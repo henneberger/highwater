@@ -13,7 +13,7 @@ Events for one Process key commit in mailbox order unless an explicit event-time
 
 ## Deduplication
 
-A stable event ID deduplicates uncertain ingestion retries. Reusing an ID with different content fails. Deduplication does not make a direct external side effect idempotent.
+A stable event ID deduplicates uncertain ingestion retries. Direct process ingress requires that identity, scoped to the process key, and reusing it with different content fails. Every admitted process event retains a queryable `PENDING`, `COMMITTED`, or `FAILED` outcome. Deduplication does not make a direct external side effect idempotent.
 
 ## Invocation
 

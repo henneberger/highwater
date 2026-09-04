@@ -52,6 +52,7 @@ def _process_node(
     input: str,
     process_id: str | None = None,
     options: ProcessOptions | None = None,
+    direct_ingress: bool = False,
 ) -> ProcessSpec:
     """Lower a decorated Process into the same durable spec used by Client."""
     name = getattr(definition, "__highwater_process__", None)
@@ -85,6 +86,7 @@ def _process_node(
         capacity=selected.capacity,
         retry_concurrency=selected.retry_concurrency,
         max_attempts=selected.max_attempts,
+        direct_ingress=direct_ingress,
         discard_input_on_success=selected.discard_input_on_success,
         batch_size=batch_size,
         batch_delay=batch_delay,

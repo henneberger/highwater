@@ -21,6 +21,40 @@ pub(crate) fn maintain_event_time(app: &AppState) -> Result<()> {
     })
 }
 
+pub(crate) fn promote_process_outputs(app: &AppState, selected_sink: Option<&str>) -> Result<()> {
+    app.store.sync_all_remote()?;
+    let pending = app
+        .store
+        .scan::<PendingProcessOutput>(pending_process_output_prefix())?
+        .into_iter()
+        .filter(|(_, pending)| selected_sink.is_none_or(|sink| pending.message.sink == sink))
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    app.commit(|transaction| {
+        for (_, pending) in &pending {
+            let key = outbox_key(&pending.message.sink, &pending.message.message_id);
+            if let Some(existing) = transaction.get::<OutboxMessage>(&key)? {
+                if existing.message_id != pending.message.message_id
+                    || existing.payload != pending.message.payload
+                {
+                    bail!("process output promotion identity collision");
+                }
+            } else {
+                transaction.put(key, &pending.message)?;
+            }
+        }
+        Ok(())
+    })?;
+
+    // The source-shard marker is intentionally immutable. Deleting it would
+    // require a published checkpoint vector that covers both this marker and
+    // the control-shard outbox insertion; otherwise a cross-shard snapshot
+    // could observe neither side of the handoff.
+    Ok(())
+}
+
 pub(crate) fn recover_process_tasks(app: &AppState, recover_orphans: bool) -> Result<()> {
     let timestamp = now();
     let mut expired_by_shard = BTreeMap::<usize, Vec<(String, ProcessBatchLease)>>::new();
@@ -64,22 +98,32 @@ pub(crate) fn recover_process_tasks(app: &AppState, recover_orphans: bool) -> Re
                 let mut shard_state = transaction
                     .get::<ProcessShardState>(&state_key)?
                     .unwrap_or_default();
-                for mut ready_execution in lease.executions {
-                    let execution = &mut ready_execution.execution;
-                    if execution.attempt > 0 {
-                        if execution.isolated_retry {
-                            shard_state.retry_running = shard_state.retry_running.saturating_sub(1);
-                        } else {
-                            shard_state.running = shard_state.running.saturating_sub(1);
-                            execution.isolated_retry = true;
-                        }
-                        shard_state.retry_pending += 1;
-                    }
-                    transaction.put(
-                        process_ready_key(shard, &execution.process_id, execution.sequence),
-                        &ready_execution,
+                let process = transaction
+                    .get::<DurableProcess>(&process_key(&lease.process_id))?
+                    .ok_or_else(|| anyhow!("process not found: {}", lease.process_id))?;
+                let failure = if orphaned {
+                    "activation lost when its partition owner was fenced"
+                } else {
+                    "activation lease expired before completion"
+                };
+                for ready_execution in lease.executions {
+                    retry_or_quarantine_sharded_execution(
+                        transaction,
+                        &process,
+                        shard,
+                        ready_execution,
+                        failure.to_owned(),
+                        &mut shard_state,
                     )?;
                 }
+                let data_shards = app.shard_locks.len().saturating_sub(1).max(1);
+                dispatch_sharded_process(
+                    transaction,
+                    &process,
+                    shard,
+                    data_shards,
+                    &mut shard_state,
+                )?;
                 transaction.put(&state_key, &shard_state)?;
                 transaction.delete(lease_key);
             }
@@ -109,6 +153,9 @@ pub(crate) async fn event_time_maintenance_loop(app: AppState) {
         if let Err(error) = renew_process_partitions(&app) {
             eprintln!("process partition renewal failed: {error:#}");
         }
+        if let Err(error) = promote_process_outputs(&app, None) {
+            eprintln!("process output promotion failed: {error:#}");
+        }
         let has_remote_owner = app
             .store
             .scan::<KeyGroupLease>("key-group/")
@@ -134,16 +181,6 @@ pub(crate) async fn event_time_maintenance_loop(app: AppState) {
 pub(crate) async fn create_checkpoint(
     State(app): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let remote_owner = app
-        .store
-        .scan::<KeyGroupLease>("key-group/")?
-        .into_iter()
-        .any(|(_, lease)| lease.lease_expires > now() && lease.owner != app.node_id);
-    if remote_owner {
-        return Err(ApiError(anyhow!(
-            "remote key-group owners require a distributed checkpoint barrier"
-        )));
-    }
     Ok((StatusCode::CREATED, Json(app.store.checkpoint()?)))
 }
 
@@ -154,71 +191,47 @@ pub(crate) async fn create_checkpoint_barrier(
         .mutation_lock
         .lock()
         .map_err(|_| anyhow!("mutation lock poisoned"))?;
-    if app
-        .store
-        .scan::<CheckpointBarrier>("checkpoint-barrier/")?
-        .into_iter()
-        .any(|(_, barrier)| barrier.status == "ALIGNING")
-    {
-        return Err(ApiError(anyhow!(
-            "a checkpoint barrier is already aligning"
-        )));
-    }
-    let mut manifest = app.store.prepare_checkpoint()?;
-    let leases = app.store.scan::<KeyGroupLease>("key-group/")?;
-    let mut expected_key_group_epochs: BTreeMap<String, BTreeMap<u32, u64>> = BTreeMap::new();
-    for (_, lease) in leases {
-        if lease.lease_expires > now() {
-            expected_key_group_epochs
-                .entry(lease.owner)
-                .or_default()
-                .insert(lease.key_group, lease.epoch);
-        }
-    }
-    let expected_nodes = expected_key_group_epochs
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    let local_epochs = expected_key_group_epochs
-        .get(&app.node_id)
-        .cloned()
-        .unwrap_or_default();
-    let local_ack = CheckpointAck {
-        node_id: app.node_id.clone(),
-        state_handle: manifest.object_path.clone(),
-        key_group_epochs: local_epochs,
-        acked_at: now(),
-    };
-    let mut acknowledgements = BTreeMap::new();
-    if expected_key_group_epochs.contains_key(&app.node_id) {
-        acknowledgements.insert(app.node_id.clone(), local_ack);
-    }
-    let complete = acknowledgements.len() == expected_nodes.len();
-    if complete {
-        for (node, ack) in &acknowledgements {
-            manifest
-                .state_handles
-                .insert(node.clone(), ack.state_handle.clone());
-        }
-        app.store.publish_checkpoint(&manifest)?;
-    }
+    // Every node can rebuild every shard from the authoritative object journal.
+    // prepare_checkpoint synchronizes those tails and snapshots the resulting
+    // vector cut, so owner-local state handles and remote acknowledgements are
+    // neither required nor part of the restore protocol.
+    let manifest = app.store.prepare_checkpoint()?;
+    app.store.publish_checkpoint(&manifest)?;
     let barrier = CheckpointBarrier {
         checkpoint_id: manifest.checkpoint_id.clone(),
         sequence: manifest.sequence,
-        status: if complete { "COMPLETE" } else { "ALIGNING" }.to_owned(),
-        expected_nodes,
-        expected_key_group_epochs,
-        acknowledgements,
+        status: "COMPLETE".to_owned(),
+        expected_nodes: Vec::new(),
+        expected_key_group_epochs: BTreeMap::new(),
+        acknowledgements: BTreeMap::new(),
         manifest,
         created_at: now(),
     };
-    app.store.commit(vec![Mutation {
+    let mutation = Mutation {
         op: "put".to_owned(),
         key: checkpoint_barrier_key(&barrier.checkpoint_id),
         end_key: None,
         value: Some(serde_json::to_value(&barrier)?),
         encoded_value: None,
-    }])?;
+    };
+    let mut committed = false;
+    for _ in 0..8 {
+        app.store.sync_remote_shard(0)?;
+        match app.store.commit(vec![mutation.clone()]) {
+            Ok(()) => {
+                committed = true;
+                break;
+            }
+            Err(error) if error.to_string().contains("conditional append was fenced") => {}
+            Err(error) => return Err(ApiError(error)),
+        }
+    }
+    if !committed {
+        return Err(ApiError(anyhow!(
+            "checkpoint {} was published, but its compatibility record remained fenced after retries",
+            barrier.checkpoint_id
+        )));
+    }
     Ok((StatusCode::CREATED, Json(barrier)))
 }
 
@@ -254,64 +267,20 @@ pub(crate) async fn pending_checkpoint_barriers(
 pub(crate) async fn acknowledge_checkpoint_barrier(
     State(app): State<AppState>,
     Path((checkpoint_id, node_id)): Path<(String, String)>,
-    Json(request): Json<AcknowledgeCheckpointRequest>,
+    Json(_request): Json<AcknowledgeCheckpointRequest>,
 ) -> Result<Json<CheckpointBarrier>, ApiError> {
     let _guard = app
         .mutation_lock
         .lock()
         .map_err(|_| anyhow!("mutation lock poisoned"))?;
     let key = checkpoint_barrier_key(&checkpoint_id);
-    let mut barrier = app
+    let _barrier = app
         .store
         .get::<CheckpointBarrier>(&key)?
         .ok_or_else(|| anyhow!("checkpoint barrier not found: {checkpoint_id}"))?;
-    let expected = barrier
-        .expected_key_group_epochs
-        .get(&node_id)
-        .ok_or_else(|| anyhow!("node {node_id} is not part of checkpoint {checkpoint_id}"))?;
-    if expected != &request.key_group_epochs {
-        return Err(ApiError(anyhow!(
-            "checkpoint acknowledgement has stale or incomplete key-group epochs"
-        )));
-    }
-    for (key_group, epoch) in expected {
-        let lease = app
-            .store
-            .get::<KeyGroupLease>(&key_group_key(*key_group))?
-            .ok_or_else(|| anyhow!("key group {key_group} is unassigned"))?;
-        if lease.owner != node_id || lease.epoch != *epoch || lease.lease_expires <= now() {
-            return Err(ApiError(anyhow!(
-                "node {node_id} was fenced while checkpoint {checkpoint_id} aligned"
-            )));
-        }
-    }
-    barrier.acknowledgements.insert(
-        node_id.clone(),
-        CheckpointAck {
-            node_id,
-            state_handle: request.state_handle,
-            key_group_epochs: request.key_group_epochs,
-            acked_at: now(),
-        },
-    );
-    if barrier.acknowledgements.len() == barrier.expected_nodes.len() {
-        for (node, ack) in &barrier.acknowledgements {
-            barrier
-                .manifest
-                .state_handles
-                .insert(node.clone(), ack.state_handle.clone());
-        }
-        app.store.publish_checkpoint(&barrier.manifest)?;
-        barrier.status = "COMPLETE".to_owned();
-    }
-    app.store.commit(vec![Mutation {
-        op: "put".to_owned(),
-        key,
-        end_key: None,
-        value: Some(serde_json::to_value(&barrier)?),
-        encoded_value: None,
-    }])?;
-    Ok(Json(barrier))
+    Err(ApiError(anyhow!(
+        "checkpoint {checkpoint_id} uses journal-vector publication; remote acknowledgement from {node_id} is not accepted"
+    )))
 }
 
 pub(crate) async fn get_checkpoint_manifest(
@@ -487,23 +456,38 @@ pub(crate) async fn poll_sink(
             "consumer_id must be non-empty and lease_seconds positive"
         )));
     }
+    promote_process_outputs(&app, Some(&sink))?;
+    app.store.sync_all_remote()?;
+    let timestamp = now();
+    let candidate = app
+        .store
+        .scan::<OutboxMessage>(&outbox_prefix(&sink))?
+        .into_iter()
+        .find(|(_, message)| {
+            message.acked_at.is_none()
+                && message
+                    .lease_expires
+                    .is_none_or(|lease_expires| lease_expires <= timestamp)
+        });
+    let Some((candidate_key, candidate)) = candidate else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let shard = usize::try_from(candidate.shard)?;
     let mut message = None;
-    app.commit(|transaction| {
+    app.commit_shard(shard, |transaction| {
         let timestamp = now();
-        let candidate = transaction
-            .scan::<OutboxMessage>(&outbox_prefix(&sink))?
-            .into_iter()
-            .find(|(_, message)| {
-                message.acked_at.is_none()
-                    && message
-                        .lease_expires
-                        .is_none_or(|lease_expires| lease_expires <= timestamp)
-            });
-        if let Some((key, mut candidate)) = candidate {
+        let Some(mut candidate) = transaction.get::<OutboxMessage>(&candidate_key)? else {
+            return Ok(());
+        };
+        if candidate.acked_at.is_none()
+            && candidate
+                .lease_expires
+                .is_none_or(|lease_expires| lease_expires <= timestamp)
+        {
             candidate.lease_owner = Some(request.consumer_id.clone());
             candidate.lease_expires = Some(timestamp + request.lease_seconds);
             candidate.delivery_attempt += 1;
-            transaction.put(key, &candidate)?;
+            transaction.put(&candidate_key, &candidate)?;
             message = Some(candidate);
         }
         Ok(())
@@ -519,9 +503,15 @@ pub(crate) async fn ack_sink_message(
     Path((sink, message_id)): Path<(String, String)>,
     Json(request): Json<AckSinkRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    app.store.sync_all_remote()?;
+    let key = outbox_key(&sink, &message_id);
+    let existing = app
+        .store
+        .get::<OutboxMessage>(&key)?
+        .ok_or_else(|| anyhow!("outbox message not found: {message_id}"))?;
+    let shard = usize::try_from(existing.shard)?;
     let mut response = None;
-    app.commit(|transaction| {
-        let key = outbox_key(&sink, &message_id);
+    app.commit_shard(shard, |transaction| {
         let mut message = transaction
             .get::<OutboxMessage>(&key)?
             .ok_or_else(|| anyhow!("outbox message not found: {message_id}"))?;

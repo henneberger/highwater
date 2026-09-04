@@ -165,6 +165,7 @@ class ProcessSpec:
     capacity: int = 10_000
     retry_concurrency: int = 8
     max_attempts: int = 5
+    direct_ingress: bool = False
     discard_input_on_success: bool = False
     batch_size: int = 64
     batch_delay: float = 0.005

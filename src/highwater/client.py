@@ -9,7 +9,7 @@ import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -183,12 +183,15 @@ class ProcessHandle:
                     key=selected_key,
                     event_id=stable_event_id,
                 )
-            except StreamBackpressure:
+            except (StreamBackpressure, URLError, TimeoutError, ConnectionError):
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 1.0)
 
     async def state(self, key: str) -> Any:
         return await self.client.process_state(self.id, key)
+
+    async def outcome(self, key: str, event_id: str) -> dict[str, Any]:
+        return await self.client.process_outcome(self.id, key, event_id)
 
     async def send_many(self, events: list[Any]) -> Any:
         if not events:
@@ -229,7 +232,7 @@ class ProcessHandle:
                         f"/processes/{quote(self.id, safe='')}/events",
                         bytes(payload),
                     )
-                except StreamBackpressure:
+                except (StreamBackpressure, URLError, TimeoutError, ConnectionError):
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 1.0)
         records = []
@@ -259,7 +262,7 @@ class ProcessHandle:
                         self.input, records[offset:offset + 1_000],
                     ))
                     break
-                except StreamBackpressure:
+                except (StreamBackpressure, URLError, TimeoutError, ConnectionError):
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 1.0)
         return responses
@@ -278,7 +281,11 @@ class ProcessHandle:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             current = await self.client.process(self.id)
-            if current["pending"] == 0 and current["running"] == 0:
+            if (
+                current["pending"] == 0
+                and current["running"] == 0
+                and current.get("retrying", 0) == 0
+            ):
                 return
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(self.id)
@@ -648,6 +655,7 @@ class Client:
                 "mailbox_capacity": spec.capacity,
                 "retry_concurrency": spec.retry_concurrency,
                 "max_attempts": spec.max_attempts,
+                "direct_ingress": spec.direct_ingress,
                 "discard_input_on_success": spec.discard_input_on_success,
                 "batch_max_size": spec.batch_size,
                 "batch_max_delay": spec.batch_delay,
@@ -736,6 +744,7 @@ class Client:
         input: str,
         process_id: str | None = None,
         options: ProcessOptions | None = None,
+        _direct_ingress: bool = False,
     ) -> ProcessHandle:
         name = getattr(definition, "__highwater_process__", None)
         if name is None:
@@ -750,6 +759,7 @@ class Client:
             input=input,
             process_id=identifier,
             options=selected,
+            direct_ingress=_direct_ingress,
         ))
         return ProcessHandle(
             self,
@@ -782,21 +792,35 @@ class Client:
                 if "not found" not in str(error):
                     raise
                 await self.create_stream(input_stream)
+        existing_process = None
+        try:
+            existing_process = await self.process(identifier)
+        except RuntimeError as error:
+            if "not found" not in str(error):
+                raise
+        selected = options or ProcessOptions(
+            key=getattr(definition, "__highwater_process_key__"),
+            event_time_gate=getattr(definition, "__highwater_process_gate__"),
+        )
+        direct_ingress = (
+            owns_input
+            and not getattr(definition, "__highwater_versioned_streams__", ())
+            and selected.event_time_gate == EventTimeGate.IMMEDIATE
+        )
+        if (
+            existing_process is not None
+            and existing_process.get("stream") == input_stream
+        ):
+            direct_ingress = existing_process.get("direct_ingress", False)
         handle = await self.deploy_process(
             definition,
             input=input_stream,
             process_id=identifier,
-            options=options,
+            options=selected,
+            _direct_ingress=direct_ingress,
         )
         handle.owns_input = owns_input
-        handle.direct_ingress = (
-            owns_input
-            and not getattr(definition, "__highwater_versioned_streams__", ())
-            and (options or ProcessOptions(
-                key=getattr(definition, "__highwater_process_key__"),
-                event_time_gate=getattr(definition, "__highwater_process_gate__"),
-            )).event_time_gate == EventTimeGate.IMMEDIATE
-        )
+        handle.direct_ingress = direct_ingress
         return handle
 
     async def get_process_handle(self, process_id: str) -> ProcessHandle:
@@ -807,10 +831,7 @@ class Client:
             current["stream"],
             current.get("key_field"),
             current.get("event_time_field"),
-            direct_ingress=(
-                current.get("event_time_gate") == EventTimeGate.IMMEDIATE
-                and not current.get("versioned_streams")
-            ),
+            direct_ingress=current.get("direct_ingress", False),
         )
 
     async def temporal_join(self, join_id: str) -> dict[str, Any]:
@@ -821,6 +842,15 @@ class Client:
     async def process(self, process_id: str) -> dict[str, Any]:
         return await self._request(
             "GET", f"/processes/{quote(process_id, safe='')}",
+        )
+
+    async def process_outcome(
+        self, process_id: str, key: str, event_id: str,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"/processes/{quote(process_id, safe='')}/keys/{quote(key, safe='')}/"
+            f"events/{quote(event_id, safe='')}",
         )
 
     async def process_quarantine(self, process_id: str) -> list[dict[str, Any]]:

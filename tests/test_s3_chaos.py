@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -312,7 +313,9 @@ class S3ChaosTest(unittest.TestCase):
         self.fail("no process activation became available")
 
     @staticmethod
-    def _completion(activation: dict[str, Any], balance: int) -> dict[str, Any]:
+    def _completion(
+        activation: dict[str, Any], balance: int, emit: Any = None,
+    ) -> dict[str, Any]:
         return {
             "protocol_version": 1,
             "lease_token": activation["lease_token"],
@@ -324,7 +327,7 @@ class S3ChaosTest(unittest.TestCase):
                     "result": {
                         "__highwater_transition__": True,
                         "state": {"balance": balance},
-                        "emit": None,
+                        "emit": emit,
                     }
                 }
                 for _ in activation["envelopes"]
@@ -353,6 +356,7 @@ class S3ChaosTest(unittest.TestCase):
                 "build_id": "chaos-v1",
                 "task_queue": "default",
                 "event_time_gate": "immediate",
+                "direct_ingress": True,
                 "batch_max_size": 1,
                 "batch_max_delay": 0,
             },
@@ -492,6 +496,138 @@ class S3ChaosTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(process["completed"], 2)
+        self.assertIsNone(node_b.poll())
+
+    def test_non_owner_publishes_journal_vector_checkpoint_and_restores_it(self) -> None:
+        a_public, a_execution, b_public, b_execution = (free_port() for _ in range(4))
+        node_a = self._start_node("node-a", a_public, a_execution)
+        self._wait_for_owners(a_public, "node-a")
+        node_b = self._start_node("node-b", b_public, b_execution)
+        self._wait_for_owners(b_public, "node-a")
+
+        status, _ = request_json(
+            "POST", f"http://127.0.0.1:{a_public}/streams", {"name": "checkpoint-input"}
+        )
+        self.assertEqual(status, 201)
+        status, _ = request_json(
+            "POST",
+            f"http://127.0.0.1:{a_public}/processes",
+            {
+                "process_id": "checkpoint-process",
+                "stream": "checkpoint-input",
+                "workflow_type": "CheckpointProcess",
+                "state_version": 1,
+                "build_id": "chaos-v1",
+                "task_queue": "default",
+                "event_time_gate": "immediate",
+                "direct_ingress": True,
+                "batch_max_size": 1,
+                "batch_max_delay": 0,
+            },
+        )
+        self.assertIn(status, (200, 201))
+        status, admitted = request_json(
+            "POST",
+            f"http://127.0.0.1:{b_public}/processes/checkpoint-process/events",
+            {
+                "records": [
+                    {
+                        "partition": 0,
+                        "event_time": 1,
+                        "key": "account-a",
+                        "value": {"delta": 5},
+                        "kind": "upsert",
+                        "event_id": "checkpoint-event-1",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(admitted[0]["disposition"], "accepted")
+
+        activation = self._poll(a_execution)
+        status, _ = request_json(
+            "POST",
+            f"http://127.0.0.1:{a_execution}/internal/v1/process-tasks/complete-batch",
+            self._completion(activation, 5, {"balance": 5}),
+        )
+        self.assertEqual(status, 200)
+
+        status, outcome = request_json(
+            "GET",
+            f"http://127.0.0.1:{b_public}/processes/checkpoint-process/"
+            "keys/account-a/events/checkpoint-event-1",
+        )
+        self.assertEqual(status, 200, outcome)
+        self.assertEqual(outcome["status"], "COMMITTED")
+        self.assertEqual(len(outcome["output_message_ids"]), 1)
+        sink = urllib.parse.quote("process:checkpoint-process", safe="")
+        status, delivered = request_json(
+            "POST",
+            f"http://127.0.0.1:{b_public}/sinks/{sink}/poll",
+            {"consumer_id": "checkpoint-consumer", "lease_seconds": 30},
+        )
+        self.assertEqual(status, 200, delivered)
+        message_id = urllib.parse.quote(delivered["message_id"], safe="")
+        status, _ = request_json(
+            "POST",
+            f"http://127.0.0.1:{b_public}/sinks/{sink}/messages/{message_id}/ack",
+            {"consumer_id": "checkpoint-consumer"},
+        )
+        self.assertEqual(status, 200)
+
+        # Node B owns no process partition. Its checkpoint must synchronize the
+        # authoritative journal vector, include node A's committed transition,
+        # and publish without an unverifiable owner-local acknowledgement.
+        status, checkpoint = request_json(
+            "POST", f"http://127.0.0.1:{b_public}/admin/checkpoints", {}
+        )
+        self.assertEqual(status, 201, checkpoint)
+        self.assertTrue(checkpoint["shard_sequences"])
+
+        status, barrier = request_json(
+            "POST", f"http://127.0.0.1:{b_public}/admin/checkpoint-barriers", {}
+        )
+        self.assertEqual(status, 201, barrier)
+        self.assertEqual(barrier["status"], "COMPLETE")
+        self.assertEqual(barrier["expected_nodes"], [])
+        self.assertEqual(barrier["acknowledgements"], {})
+        status, _ = request_json(
+            "POST",
+            f"http://127.0.0.1:{b_public}/admin/checkpoint-barriers/"
+            f"{barrier['checkpoint_id']}/acks/node-a",
+            {"state_handle": "unverified", "key_group_epochs": {}},
+        )
+        self.assertGreaterEqual(status, 400)
+
+        node_a.kill()
+        node_a.wait(timeout=10)
+        node_b.kill()
+        node_b.wait(timeout=10)
+        shutil.rmtree(self.root / "node-b")
+
+        node_b = self._start_node("node-b", b_public, b_execution)
+        self._wait_for_owners(b_public, "node-b", minimum_epoch=2)
+        status, state = request_json(
+            "GET",
+            f"http://127.0.0.1:{b_public}/processes/checkpoint-process/keys/account-a",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(state["state"], {"balance": 5})
+        status, outcome = request_json(
+            "GET",
+            f"http://127.0.0.1:{b_public}/processes/checkpoint-process/"
+            "keys/account-a/events/checkpoint-event-1",
+        )
+        self.assertEqual(status, 200, outcome)
+        self.assertEqual(outcome["status"], "COMMITTED")
+        status, delivered = request_json(
+            "POST",
+            f"http://127.0.0.1:{b_public}/sinks/{sink}/poll",
+            {"consumer_id": "checkpoint-consumer", "lease_seconds": 30},
+        )
+        self.assertEqual(status, 204, delivered)
+        self.assertIsNone(delivered)
         self.assertIsNone(node_b.poll())
 
 

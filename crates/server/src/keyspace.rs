@@ -219,6 +219,14 @@ pub(crate) fn process_quarantine_key(process_id: &str, shard: usize, sequence: u
         process_quarantine_prefix(process_id)
     )
 }
+pub(crate) fn process_outcome_key(process_id: &str, key: &str, event_id: &str) -> String {
+    format!(
+        "process-outcome/{}/{}/{}",
+        encoded(process_id),
+        encoded(key),
+        encoded(event_id)
+    )
+}
 
 pub(crate) fn append_operator_change(
     transaction: &mut Transaction<'_>,
@@ -428,6 +436,18 @@ pub(crate) fn outbox_prefix(sink: &str) -> String {
 
 pub(crate) fn outbox_key(sink: &str, message_id: &str) -> String {
     format!("{}{}", outbox_prefix(sink), encoded(message_id))
+}
+
+pub(crate) fn pending_process_output_prefix() -> &'static str {
+    "process-outbox-pending/"
+}
+
+pub(crate) fn pending_process_output_key(shard: u32, message_id: &str) -> String {
+    format!(
+        "{}{shard:04}/{}",
+        pending_process_output_prefix(),
+        encoded(message_id)
+    )
 }
 
 pub(crate) fn key_group_for(key: Option<&str>, _partition: u32, count: u32) -> u32 {

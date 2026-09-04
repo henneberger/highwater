@@ -5,7 +5,7 @@ description: Bound recovery without putting periodic snapshots on the commit pat
 
 Highwater continuously records committed transitions and periodically publishes an immutable checkpoint of materialized state.
 
-A checkpoint contains a consistent progress vector across owned partitions plus state handles. Publication is atomic: recovery sees either the prior complete checkpoint or the new complete checkpoint, never a partially published one.
+A checkpoint contains a full materialized-state snapshot at a vector of authoritative journal positions. Publication is atomic: recovery sees either the prior complete checkpoint or the new complete checkpoint, never a partially published one. Records committed after the vector cut remain in the journal tail and replay during recovery.
 
 After publication, durable history covered by the checkpoint becomes eligible for tiering or cleanup. Cleanup never precedes publication.
 

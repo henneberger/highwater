@@ -333,6 +333,7 @@ class SdkTest(unittest.TestCase):
             "mailbox_capacity": 100,
             "retry_concurrency": 8,
             "max_attempts": 5,
+            "direct_ingress": False,
             "discard_input_on_success": False,
             "batch_max_size": 64,
             "batch_max_delay": 0.005,

@@ -13,6 +13,7 @@ from pathlib import Path
 from highwater import (
     AutoscalingPolicy,
     Client,
+    ProcessOptions,
     Registry,
     WorkloadSample,
     assign_partitions,
@@ -191,6 +192,180 @@ class ElasticExecutionTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_execution_has_one_terminal_outcome_and_acknowledged_output(self) -> None:
+        async def run() -> None:
+            client = Client(self.target, poll_interval=0.001)
+            counters = await client.start(
+                ElasticCounter,
+                process_id="reliable-execution-counters",
+            )
+            event = {"key": "account-1", "amount": 7}
+            admitted = await counters.send(event, event_time=1, event_id="account-1:event-1")
+            self.assertEqual(admitted["disposition"], "accepted")
+
+            duplicate = await counters.send(event, event_time=1, event_id="account-1:event-1")
+            self.assertEqual(duplicate["disposition"], "duplicate")
+            with self.assertRaisesRegex(RuntimeError, "different process event contents"):
+                await counters.send(
+                    {"key": "account-1", "amount": 8},
+                    event_time=1,
+                    event_id="account-1:event-1",
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "stable event_id"):
+                await client._request(
+                    "POST",
+                    "/processes/reliable-execution-counters/events",
+                    {"records": [{
+                        "event_time": time.time(),
+                        "key": "account-2",
+                        "value": {"key": "account-2", "amount": 1},
+                    }]},
+                )
+
+            async with self.workers(1):
+                await counters.drain(timeout=20)
+
+            outcome = await counters.outcome("account-1", "account-1:event-1")
+            self.assertEqual(outcome["status"], "COMMITTED")
+            self.assertEqual(outcome["failure"], None)
+            self.assertEqual(len(outcome["output_message_ids"]), 1)
+
+            sink = "process:reliable-execution-counters"
+            delivered = await client.poll_sink(sink, "test-consumer")
+            self.assertIsNotNone(delivered)
+            assert delivered is not None
+            self.assertEqual(delivered["message_id"], outcome["output_message_ids"][0])
+            self.assertEqual(delivered["payload"]["event_id"], "account-1:event-1")
+            self.assertEqual(delivered["payload"]["value"], {"key": "account-1", "total": 7})
+            acked = await client.ack_sink(sink, delivered["message_id"], "test-consumer")
+            self.assertIsNotNone(acked["acked_at"])
+            self.assertIsNone(await client.poll_sink(sink, "test-consumer"))
+
+        asyncio.run(run())
+
+    def test_repeated_worker_loss_reaches_a_durable_terminal_failure(self) -> None:
+        async def run() -> None:
+            client = Client(self.target, poll_interval=0.01)
+            counters = await client.start(
+                ElasticCounter,
+                process_id="worker-loss-terminal-counters",
+                options=ProcessOptions(key="key", max_attempts=2),
+            )
+            await counters.send(
+                {"key": "crash-key", "amount": 1},
+                event_time=1,
+                event_id="crash-key:event-1",
+            )
+            poll = {
+                "protocol_version": 1,
+                "worker_id": "crashing-worker",
+                "task_queue": "default",
+                "build_ids": ["elastic-counter-v1"],
+                "lease_seconds": 0.05,
+            }
+
+            async def take_activation(deadline: float) -> dict:
+                while time.monotonic() < deadline:
+                    for partition in range(1, 5):
+                        activation = await client._request(
+                            "POST",
+                            "/internal/v1/process-tasks/poll-batch",
+                            {**poll, "partition_id": partition},
+                        )
+                        if activation is not None:
+                            return activation
+                    await asyncio.sleep(0.05)
+                self.fail("expired execution was not made available for another activation")
+
+            first = await take_activation(time.monotonic() + 2)
+            self.assertEqual(first["process_id"], "worker-loss-terminal-counters")
+
+            deadline = time.monotonic() + 7
+            while True:
+                outcome = await counters.outcome("crash-key", "crash-key:event-1")
+                if outcome["attempts"] == 1:
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail(f"first lost activation was not recorded: {outcome!r}")
+                await asyncio.sleep(0.05)
+
+            second = await take_activation(time.monotonic() + 2)
+            self.assertNotEqual(second["lease_token"], first["lease_token"])
+
+            deadline = time.monotonic() + 7
+            while True:
+                outcome = await counters.outcome("crash-key", "crash-key:event-1")
+                if outcome["status"] == "FAILED":
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail(f"crash loop did not reach a terminal outcome: {outcome!r}")
+                await asyncio.sleep(0.05)
+            self.assertEqual(outcome["attempts"], 2)
+            self.assertIn("lease expired", outcome["failure"])
+            process = await counters.info()
+            self.assertEqual(process["running"], 0)
+            self.assertEqual(process["retrying"], 0)
+            self.assertEqual(process["quarantined"], 1)
+
+        asyncio.run(run())
+
+    def test_stream_process_worker_loss_uses_the_same_terminal_budget(self) -> None:
+        async def run() -> None:
+            client = Client(self.target, poll_interval=0.01)
+            await client.create_stream("stream-worker-loss-input")
+            counters = await client.deploy_process(
+                ElasticCounter,
+                input="stream-worker-loss-input",
+                process_id="stream-worker-loss-counters",
+                options=ProcessOptions(key="key", max_attempts=2),
+            )
+            await counters.send(
+                {"key": "stream-crash-key", "amount": 1},
+                event_time=1,
+                event_id="stream-crash-key:event-1",
+            )
+            poll = {
+                "protocol_version": 1,
+                "worker_id": "crashing-stream-worker",
+                "task_queue": "default",
+                "build_ids": ["elastic-counter-v1"],
+                "lease_seconds": 0.05,
+            }
+
+            async def poll_activation() -> list[dict]:
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    activations = await client._request(
+                        "POST", "/internal/v1/workflow-tasks/poll-batch", poll,
+                    )
+                    if activations:
+                        return activations
+                    await asyncio.sleep(0.01)
+                return []
+
+            first = await poll_activation()
+            self.assertEqual(len(first), 1)
+            await asyncio.sleep(0.06)
+            second = await poll_activation()
+            self.assertEqual(len(second), 1)
+            self.assertNotEqual(second[0]["task_token"], first[0]["task_token"])
+            await asyncio.sleep(0.06)
+            self.assertEqual(await poll_activation(), [])
+
+            outcome = await counters.outcome(
+                "stream-crash-key", "stream-crash-key:event-1",
+            )
+            self.assertEqual(outcome["status"], "FAILED")
+            self.assertEqual(outcome["attempts"], 2)
+            self.assertIn("lease expired", outcome["failure"])
+            process = await counters.info()
+            self.assertEqual(process["running"], 0)
+            self.assertEqual(process["retrying"], 0)
+            self.assertEqual(process["quarantined"], 1)
+
+        asyncio.run(run())
+
     def test_backlog_drives_live_scale_out_and_survives_worker_loss(self) -> None:
         async def run() -> None:
             client = Client(self.target, poll_interval=0.001)
@@ -214,14 +389,8 @@ class ElasticExecutionTest(unittest.TestCase):
                 ]
 
             initial = launch(((1, 2, 3, 4),))
-            started = time.time()
-            before_info = await counters.info()
-            before = WorkloadSample(
-                started,
-                before_info["pending"],
-                before_info["running"],
-                before_info["completed"],
-            )
+            scaled = []
+            publishers = []
 
             async def publish_round(amount: int) -> None:
                 for offset in range(0, 2_000, 100):
@@ -231,58 +400,96 @@ class ElasticExecutionTest(unittest.TestCase):
                     ])
                     await asyncio.sleep(0.005)
 
-            first_publish = asyncio.create_task(publish_round(1))
-            await asyncio.sleep(0.04)
-            during_info = await counters.info()
-            decision = recommend_replicas(
-                before,
-                WorkloadSample(
-                    time.time(),
-                    during_info["pending"],
-                    during_info["running"],
-                    during_info["completed"],
-                ),
-                current_replicas=1,
-                partitions=4,
-                policy=AutoscalingPolicy(
+            try:
+                started = time.time()
+                before_info = await counters.info()
+                before = WorkloadSample(
+                    started,
+                    before_info["pending"],
+                    before_info["running"],
+                    before_info["completed"],
+                )
+                policy = AutoscalingPolicy(
                     min_replicas=1,
                     max_replicas=4,
                     target_events_per_second_per_replica=100,
                     target_backlog_per_replica=100,
                     headroom=1,
                     scale_down_after=0,
-                ),
-            )
-            self.assertFalse(first_publish.done())
-            self.assertEqual(decision.desired_replicas, 4)
+                )
+                first_publish = asyncio.create_task(publish_round(1))
+                publishers.append(first_publish)
+                deadline = time.monotonic() + 10
+                while True:
+                    during_info = await counters.info()
+                    decision = recommend_replicas(
+                        before,
+                        WorkloadSample(
+                            time.time(),
+                            during_info["pending"],
+                            during_info["running"],
+                            during_info["completed"],
+                        ),
+                        current_replicas=1,
+                        partitions=4,
+                        policy=policy,
+                    )
+                    if decision.desired_replicas == 4:
+                        break
+                    if first_publish.done() or time.monotonic() >= deadline:
+                        await first_publish
+                        self.fail(
+                            "live workload never produced a four-replica decision: "
+                            f"process={during_info!r}, decision={decision!r}"
+                        )
+                    await asyncio.sleep(0.01)
 
-            scaled = launch(decision.partition_assignments)
-            await asyncio.sleep(0.02)
-            for task in initial:
-                task.cancel()
-            await asyncio.gather(*initial, return_exceptions=True)
+                scaled = launch(decision.partition_assignments)
+                await asyncio.sleep(0.02)
+                for task in initial:
+                    task.cancel()
+                await asyncio.gather(*initial, return_exceptions=True)
 
-            scaled[0].cancel()
-            await asyncio.gather(scaled[0], return_exceptions=True)
-            scaled[0] = launch((decision.partition_assignments[0],))[0]
+                scaled[0].cancel()
+                await asyncio.gather(scaled[0], return_exceptions=True)
+                scaled[0] = launch((decision.partition_assignments[0],))[0]
 
-            await first_publish
-            second_publish = asyncio.create_task(publish_round(1))
-            await second_publish
-            await counters.drain(timeout=30)
+                await first_publish
+                second_publish = asyncio.create_task(publish_round(1))
+                publishers.append(second_publish)
+                await second_publish
+                try:
+                    await counters.drain(timeout=30)
+                except TimeoutError as error:
+                    process = await counters.info()
+                    owners = await client._request("GET", "/admin/process-partitions")
+                    worker_failures = [
+                        repr(task.exception())
+                        for task in scaled
+                        if task.done() and not task.cancelled()
+                    ]
+                    raise AssertionError(
+                        "elastic workload stopped making progress: "
+                        f"process={process!r}, owners={owners!r}, "
+                        f"worker_failures={worker_failures!r}"
+                    ) from error
 
-            states = await asyncio.gather(*(
-                counters.state(f"key-{index}") for index in range(2_000)
-            ))
-            self.assertTrue(all(state == {"total": 2} for state in states))
-            process = await counters.info()
-            self.assertEqual(process["completed"], 4_000)
-            self.assertEqual(process["pending"], 0)
-            self.assertEqual(process["running"], 0)
-
-            for task in scaled:
-                task.cancel()
-            await asyncio.gather(*scaled, return_exceptions=True)
+                states = await asyncio.gather(*(
+                    counters.state(f"key-{index}") for index in range(2_000)
+                ))
+                self.assertTrue(all(state == {"total": 2} for state in states))
+                process = await counters.info()
+                self.assertEqual(process["completed"], 4_000)
+                self.assertEqual(process["pending"], 0)
+                self.assertEqual(process["running"], 0)
+            finally:
+                for task in publishers:
+                    if not task.done():
+                        task.cancel()
+                for task in initial + scaled:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*publishers, *initial, *scaled, return_exceptions=True)
 
         asyncio.run(run())
 

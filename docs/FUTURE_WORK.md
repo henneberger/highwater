@@ -22,6 +22,12 @@ Do not add more language SDKs or a cluster control plane until the first four it
 
 ## Streaming operator follow-ups
 
+The [changelog workflow assessment](CHANGELOG_WORKFLOWS.md) maps Flink's streaming
+operator families to a proposed shared contract and gives the implementation
+sequence for native retractable top-N. It identifies mode validation, row/time
+identity, normalization, and shared arrangements as prerequisites for expanding
+the relational operator catalog safely.
+
 The fixed-window, temporal-join, bounded interval-join, and event-time keep-first deduplication operators now have durable state, deterministic Process outputs, and idempotent deployment. The remaining work is:
 
 1. Move keyed operator execution to remote owners; keys and input writes already carry fenced key-group epochs.

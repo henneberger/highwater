@@ -4,6 +4,13 @@ The execution core follows Flink's incremental state and changelog model without
 
 This distinction is intentional: Flink is a stateful streaming dataflow engine whose dynamic tables produce changelog streams. Differential Dataflow is a specific weighted, partially ordered computation model. This project adopts signed differences and incremental arrangements where useful, but does not claim to run the Differential Dataflow runtime.
 
+Current changes have unit weights derived from their row kinds. Stream records
+and native edges do not yet transport arbitrary consolidated weights. In
+aggregate and view inputs, `upsert` is an addition, not replacement by primary
+key; callers must supply the old-row retraction. See the
+[changelog workflow assessment](CHANGELOG_WORKFLOWS.md) for the current composition
+boundaries and proposed common operator contract, including retractable top-N.
+
 ## Event-time sources
 
 `StreamWriter` is the normal publishing API. It resumes the durable source cursor, claims a fenced epoch for one stream partition, retries watermark-alignment backpressure, and commits each source offset atomically with its record. A bounded writer may seal its partition when its context exits.

@@ -112,6 +112,33 @@ class ElasticExecutionTest(unittest.TestCase):
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    def test_latency_target_reports_backlog_and_caps_batch_wait(self) -> None:
+        async def run() -> None:
+            client = Client(self.target, poll_interval=0.001)
+            counters = await client.start(
+                ElasticCounter,
+                process_id="latency-counters",
+                options=ProcessOptions(batch_delay=60, latency_target_seconds=0.05),
+            )
+            await counters.send({"key": "one", "amount": 1})
+            await asyncio.sleep(0.06)
+            waiting = await counters.info()
+            self.assertEqual(waiting["latency_target_seconds"], 0.05)
+            self.assertEqual(waiting["latency"]["unfinished"], 1)
+            self.assertEqual(waiting["latency"]["overdue_unfinished"], 1)
+            self.assertGreater(waiting["latency"]["oldest_unfinished_age_seconds"], 0.05)
+            async with self.workers(1):
+                # A single item must dispatch despite a 60-second collection delay.
+                await counters.drain(timeout=5)
+            done = (await counters.info())["latency"]
+            self.assertEqual(done["unfinished"], 0)
+            self.assertEqual(done["oldest_unfinished_age_seconds"], 0)
+            self.assertEqual(done["committed"], 1)
+            self.assertEqual(done["committed_target_violations"], 1)
+            self.assertGreater(done["committed_latency_max_seconds"], 0.05)
+
+        asyncio.run(run())
+
     def test_scale_out_preserves_every_key_and_ordered_state(self) -> None:
         async def run() -> None:
             client = Client(self.target, poll_interval=0.001)

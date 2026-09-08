@@ -120,7 +120,13 @@ pub(crate) fn start_process_workflow(
         .ok_or_else(|| anyhow!("process workflow task missing"))?;
     task.batch_group = Some(process.process_id.clone());
     task.batch_max_size = process.batch_max_size;
-    task.batch_max_delay = process.batch_max_delay;
+    task.batch_max_delay = (process_batch_deadline(
+        task.enqueued_at,
+        item.record.ingestion_time,
+        process.batch_max_delay,
+        process.latency_target_seconds,
+    ) - task.enqueued_at)
+        .max(0.0);
     transaction.put(task_key, &task)?;
     Ok(ProcessExecution {
         process_id: process.process_id.clone(),
@@ -825,6 +831,9 @@ pub(crate) async fn create_process(
         || !request.batch_max_delay.is_finite()
         || request.batch_max_delay < 0.0
         || request
+            .latency_target_seconds
+            .is_some_and(|target| !target.is_finite() || target <= 0.0)
+        || request
             .versioned_streams
             .iter()
             .any(|stream| stream.trim().is_empty())
@@ -836,7 +845,7 @@ pub(crate) async fn create_process(
             != request.versioned_streams.len()
     {
         return Err(ApiError(anyhow!(
-            "process state version, concurrency, retry policy, capacity, and batch settings are invalid"
+            "process state version, concurrency, retry policy, capacity, batch settings, or latency target are invalid"
         )));
     }
     let mut process = DurableProcess {
@@ -858,6 +867,7 @@ pub(crate) async fn create_process(
         discard_input_on_success: request.discard_input_on_success,
         batch_max_size: request.batch_max_size,
         batch_max_delay: request.batch_max_delay,
+        latency_target_seconds: request.latency_target_seconds,
         status: "ACTIVE".to_owned(),
         created_at: now(),
         pending: 0,
@@ -948,6 +958,7 @@ pub(crate) async fn create_process(
                 existing.discard_input_on_success = process.discard_input_on_success;
                 existing.batch_max_size = process.batch_max_size;
                 existing.batch_max_delay = process.batch_max_delay;
+                existing.latency_target_seconds = process.latency_target_seconds;
                 transaction.put(&storage_key, &existing)?;
                 return Ok(());
             }
@@ -1133,6 +1144,12 @@ pub(crate) fn append_process_shard_records(
                 ));
             }
             continue;
+        }
+        if transaction
+            .get::<Value>(&process_finality_key(process_id, key))?
+            .is_some()
+        {
+            bail!("process key is finalized: {key}");
         }
         shard_state.next_sequence += 1;
         if shard_state.next_sequence >= (1_u64 << 56) {
@@ -1728,9 +1745,18 @@ pub(crate) fn poll_process_partition(
         };
         let process = &processes[&process_id];
         let max_size = process.batch_max_size.clamp(1, 16_384) as usize;
-        if candidates.len() < max_size
-            && timestamp < candidates[0].2.execution.enqueued_at + process.batch_max_delay
-        {
+        let batch_deadline = candidates
+            .iter()
+            .map(|(_, _, ready)| {
+                process_batch_deadline(
+                    ready.execution.enqueued_at,
+                    ready.execution.record.ingestion_time,
+                    process.batch_max_delay,
+                    process.latency_target_seconds,
+                )
+            })
+            .fold(f64::INFINITY, f64::min);
+        if candidates.len() < max_size && timestamp < batch_deadline {
             return Ok(());
         }
         let token = Uuid::new_v4().to_string();
@@ -2005,6 +2031,57 @@ pub(crate) fn renew_process_partition_lease(
     Ok(lease_expires)
 }
 
+fn process_batch_deadline(
+    enqueued_at: f64,
+    ingested_at: f64,
+    max_delay: f64,
+    target: Option<f64>,
+) -> f64 {
+    let ordinary = enqueued_at + max_delay;
+    target.map_or(ordinary, |target| ordinary.min(ingested_at + target))
+}
+
+// This diagnostic uses durable input outcomes, so lease retries never reset age.
+fn process_latency_summary(
+    outcomes: impl IntoIterator<Item = ProcessExecutionOutcome>,
+    timestamp: f64,
+    target: f64,
+) -> Value {
+    let mut oldest: f64 = 0.0;
+    let mut unfinished = 0_u64;
+    let mut overdue = 0_u64;
+    let mut committed = 0_u64;
+    let mut violations = 0_u64;
+    let mut total = 0.0;
+    let mut maximum: f64 = 0.0;
+    for outcome in outcomes {
+        if outcome.status == "PENDING" {
+            let age = (timestamp - outcome.admitted_at).max(0.0);
+            oldest = oldest.max(age);
+            unfinished += 1;
+            overdue += u64::from(age > target);
+        } else if outcome.status == "COMMITTED" {
+            let latency = (outcome.updated_at - outcome.admitted_at).max(0.0);
+            committed += 1;
+            violations += u64::from(latency > target);
+            total += latency;
+            maximum = maximum.max(latency);
+        }
+    }
+    json!({
+        "boundary": "input_ingestion_to_process_commit",
+        "observed_at": timestamp,
+        "target_seconds": target,
+        "oldest_unfinished_age_seconds": oldest,
+        "unfinished": unfinished,
+        "overdue_unfinished": overdue,
+        "committed": committed,
+        "committed_target_violations": violations,
+        "committed_latency_mean_seconds": if committed > 0 { Some(total / committed as f64) } else { None },
+        "committed_latency_max_seconds": if committed > 0 { Some(maximum) } else { None },
+    })
+}
+
 pub(crate) async fn get_process(
     State(app): State<AppState>,
     Path(process_id): Path<String>,
@@ -2025,7 +2102,19 @@ pub(crate) async fn get_process(
         process.retrying += shard.retry_pending + shard.retry_running;
         process.quarantined += shard.quarantined;
     }
-    Ok(Json(process))
+    let mut response = serde_json::to_value(&process)?;
+    if let Some(target) = process.latency_target_seconds {
+        let outcomes = app.store.scan::<ProcessExecutionOutcome>(&format!(
+            "process-outcome/{}/",
+            encoded(&process_id)
+        ))?;
+        response["latency"] = process_latency_summary(
+            outcomes.into_iter().map(|(_, outcome)| outcome),
+            now(),
+            target,
+        );
+    }
+    Ok(Json(response))
 }
 
 pub(crate) async fn get_process_quarantine(
@@ -2071,6 +2160,109 @@ pub(crate) async fn get_process_outcome(
     Ok(Json(outcome))
 }
 
+fn process_finality_key(process_id: &str, key: &str) -> String {
+    format!("process-finality/{}/{}", encoded(process_id), encoded(key))
+}
+
+pub(crate) fn finalize_process_key_transaction(
+    transaction: &mut Transaction<'_>,
+    process_id: &str,
+    key: &str,
+    shard: usize,
+) -> Result<Value> {
+    let process = transaction
+        .get::<DurableProcess>(&process_key(process_id))?
+        .ok_or_else(|| anyhow!("process not found: {process_id}"))?;
+    if !process.direct_ingress {
+        bail!("key finalization requires a direct-ingress process");
+    }
+    if key.is_empty() {
+        bail!("process finalization requires a non-empty key");
+    }
+    let storage_key = process_finality_key(process_id, key);
+    if let Some(marker) = transaction.get::<Value>(&storage_key)? {
+        return Ok(marker);
+    }
+    let shard_state = transaction
+        .get::<ProcessShardState>(&process_shard_state_key(process_id, shard))?
+        .unwrap_or_default();
+    if shard_state.active_keys.contains(key)
+        || transaction
+            .scan::<ShardedProcessMailboxItem>(&process_shard_mailbox_prefix(process_id, shard))?
+            .iter()
+            .any(|(_, item)| item.key == key)
+    {
+        bail!("process key must have no pending, running, or retrying events before finalization");
+    }
+    let state = transaction.get::<ProcessStateRecord>(&process_state_key(process_id, key))?;
+    let marker = json!({
+        "process_id": process_id,
+        "key": key,
+        "basis": "business_declaration",
+        "finalized_at": now(),
+        "input_sequence": state.as_ref().map(|state| state.input_sequence),
+    });
+    transaction.put(storage_key, &marker)?;
+    Ok(marker)
+}
+
+pub(crate) async fn finalize_process_key_local(
+    State(app): State<AppState>,
+    Path((process_id, key)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let shard = app.process_shard(&key);
+    let mut marker = Value::Null;
+    app.commit_shard(shard, |transaction| {
+        owned_process_partition_epoch(transaction, &app.runtime_id, shard)?;
+        marker = finalize_process_key_transaction(transaction, &process_id, &key, shard)?;
+        Ok(())
+    })?;
+    Ok(Json(marker))
+}
+
+pub(crate) async fn finalize_process_key(
+    State(app): State<AppState>,
+    Path((process_id, key)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let shard = app.process_shard(&key);
+    app.store.sync_remote_shard(shard)?;
+    let owner = app
+        .store
+        .get::<ProcessPartitionOwner>(&process_partition_owner_key(shard))?
+        .ok_or_else(|| anyhow!("process partition {shard} is unassigned"))?;
+    if owner.owner == app.runtime_id {
+        return finalize_process_key_local(State(app), Path((process_id, key))).await;
+    }
+    if owner.status != "ACTIVE" || owner.endpoint.is_empty() || owner.lease_expires <= now() {
+        return Err(ApiError(
+            StreamCapacityError(format!("process partition {shard} is moving")).into(),
+        ));
+    }
+    let token = app
+        .cluster_token
+        .as_deref()
+        .ok_or_else(|| anyhow!("remote partition routing is not configured"))?;
+    let response = app
+        .http_client
+        .post(format!(
+            "{}/internal/v1/processes/{}/keys/{}/finalize",
+            owner.endpoint.trim_end_matches('/'),
+            percent_encoding::utf8_percent_encode(&process_id, percent_encoding::NON_ALPHANUMERIC),
+            percent_encoding::utf8_percent_encode(&key, percent_encoding::NON_ALPHANUMERIC),
+        ))
+        .bearer_auth(token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(ApiError(anyhow!(
+            "key finalization rejected: {}",
+            response.text().await?
+        )));
+    }
+    Ok(Json(response.json().await?))
+}
+
 pub(crate) async fn get_process_state(
     State(app): State<AppState>,
     Path((process_id, key)): Path<(String, String)>,
@@ -2097,6 +2289,7 @@ pub(crate) async fn get_process_state(
         "build_id": state.as_ref().map(|state| &state.build_id),
         "input_sequence": state.as_ref().map(|state| state.input_sequence),
         "event_time": state.as_ref().map(|state| state.event_time),
+        "finality": app.store.get::<Value>(&process_finality_key(&process_id, &key))?,
     })))
 }
 
@@ -2121,12 +2314,19 @@ pub(crate) async fn complete_process_through(
             .ok_or_else(|| anyhow!("process input state missing: {}", process.stream))?;
         let mut partitions = load_stream_partitions(transaction, &config)?;
         for partition in &mut partitions {
-            if !partition.sealed
-                && partition
+            if !partition.sealed {
+                // Record the explicit declaration even when inferred progress is ahead.
+                partition.declared_watermark = Some(
+                    partition
+                        .declared_watermark
+                        .map_or(watermark, |current| current.max(watermark)),
+                );
+                if partition
                     .watermark
                     .is_none_or(|current| current < watermark)
-            {
-                partition.advance_watermark(watermark, now())?;
+                {
+                    partition.advance_watermark(watermark, now())?;
+                }
                 transaction.put(
                     stream_partition_key(&process.stream, partition.partition),
                     partition,
@@ -2153,6 +2353,48 @@ pub(crate) async fn get_operator_edge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_deadline_preserves_original_age_across_retries() {
+        assert_eq!(process_batch_deadline(12.0, 10.0, 5.0, None), 17.0);
+        assert_eq!(process_batch_deadline(12.0, 10.0, 5.0, Some(1.0)), 11.0);
+        assert_eq!(process_batch_deadline(12.0, 10.0, 0.1, Some(10.0)), 12.1);
+    }
+
+    #[test]
+    fn latency_summary_separates_unfinished_committed_and_failed() {
+        let outcome = |status: &str, admitted_at: f64, updated_at: f64| ProcessExecutionOutcome {
+            process_id: "p".to_owned(),
+            event_id: "e".to_owned(),
+            key: "k".to_owned(),
+            sequence: 1,
+            status: status.to_owned(),
+            attempts: 2,
+            output_message_ids: vec![],
+            failure: None,
+            admitted_at,
+            updated_at,
+        };
+        let summary = process_latency_summary(
+            [
+                outcome("PENDING", 8.0, 9.5),
+                outcome("COMMITTED", 7.0, 7.5),
+                outcome("COMMITTED", 4.0, 6.0),
+                outcome("FAILED", 0.0, 8.0),
+            ],
+            10.0,
+            1.0,
+        );
+        assert_eq!(summary["oldest_unfinished_age_seconds"], 2.0);
+        assert_eq!(summary["unfinished"], 1);
+        assert_eq!(summary["overdue_unfinished"], 1);
+        assert_eq!(summary["committed_target_violations"], 1);
+        assert_eq!(summary["committed_latency_mean_seconds"], 1.25);
+        assert_eq!(summary["committed_latency_max_seconds"], 2.0);
+        let empty = process_latency_summary([], 10.0, 1.0);
+        assert_eq!(empty["oldest_unfinished_age_seconds"], 0.0);
+        assert!(empty["committed_latency_mean_seconds"].is_null());
+    }
 
     #[test]
     fn retries_leave_normal_concurrency_and_respect_budget() {

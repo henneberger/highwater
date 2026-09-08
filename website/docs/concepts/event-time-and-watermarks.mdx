@@ -1,42 +1,26 @@
 ---
 title: Event time and watermarks
-description: Separate when events happened from when they execute.
+description: Understand progress, policy completeness, and explicit finality.
 ---
 
-Event time comes from the source record. Processing time comes from the execution clock. They diverge whenever events are buffered, retried, delayed, or arrive out of order.
+Event time comes from the source record. Processing time comes from the execution clock. Buffering, retries, and out-of-order arrival make them diverge.
 
-A watermark `W` means an input does not expect another on-time event at or before `W`. Highwater combines progress across active input partitions conservatively.
+Highwater derives watermarks from observed timestamps in `bounded` and `monotonic` modes. In `source_managed` mode, producers report progress explicitly. The combined watermark advances monotonically from the minimum across active partitions.
 
-## Gates
+## Gates and lateness
 
-An event-time gate keeps a Process event pending until its input is complete through that event's timestamp:
+`wait_until=streaming.complete` holds a Process event until the input watermark minus allowed lateness reaches the event's timestamp. Sealing every partition releases all remaining events. Waiting events consume no execution capacity.
 
-```python
-from dataclasses import dataclass
-from highwater import streaming
+Completeness is relative to the source and late-data policy. An inferred watermark is not proof that an older record cannot arrive. `drop` discards too-late records, `side_output` isolates them, and `accept` admits them; arbitrary Python handlers are not automatically retractable.
 
-@streaming.process(
-    key="order_id",
-    event_time="occurred_at",
-    wait_until=streaming.complete,
-)
-@dataclass
-class Order:
-    @streaming.event
-    async def apply(self, event):
-        return {"order_id": event.order_id, "complete": True}
-```
+## Idleness and declarations
 
-The Process becomes runnable when the input watermark reaches `occurred_at`. It consumes no execution capacity while waiting.
+Configured idle timeouts remove quiet partitions from watermark calculation. A new event reactivates the partition, but the combined watermark cannot regress. Its historical records may therefore be too late.
 
-## Idleness
+Stream inspection exposes `finality.basis`: `pending`, `lateness_cutoff`, `source_declaration`, or `sealed_input`. Source declarations cover every unsealed partition, including idle ones. Sealing is irreversible. Neither source declarations nor inferred progress replace the configured late-data policy.
 
-An empty partition would otherwise hold back the minimum watermark forever. Sources declare idleness after a configured observation period. A new event reactivates the partition before its timestamp can affect progress.
+For business completion, a direct-ingress Process can durably finalize a quiescent key with `handle.finalize(key)`. New events are then rejected while identical retries remain idempotent. This marker is independent of event time and does not establish that outputs have reached external destinations.
 
-## Late data
+## Durability
 
-Watermarks are promises, so late-data behavior must be explicit. Highwater can reject, side-output, or revise supported incremental results. Allowed lateness delays cleanup; it does not move an event's timestamp.
-
-## Correctness
-
-Watermarks are monotonic and recover with Process state. They do not acknowledge event persistence and cannot substitute for a durable log or fenced state transition.
+Watermarks and finalization markers persist through recovery. A completeness frontier is not a storage acknowledgement or a checkpoint coverage boundary. Journal reclamation still requires a published checkpoint covering the relevant log positions.

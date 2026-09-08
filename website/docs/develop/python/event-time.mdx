@@ -1,11 +1,9 @@
 ---
 title: Event time
-description: Wait for source completeness and handle late events explicitly.
+description: Gate execution on event-time progress and close completed keys.
 ---
 
 Event time says when an event happened in its source domain. Processing time says when Highwater executes it.
-
-Declare the timestamp field:
 
 ```python
 @streaming.process(
@@ -17,18 +15,34 @@ class DeviceMetrics:
     ...
 ```
 
-`streaming.complete` is an event-time gate. An event becomes eligible only when Highwater's watermark proves the input complete through that event's timestamp.
+`streaming.complete` holds an event until the input watermark minus allowed lateness reaches its timestamp, or all input partitions are sealed. This means complete under the configured source and late-data policy. An inferred watermark cannot prove that historical events will never arrive.
 
-## Watermarks
+## Inspect progress
 
-Producers publish monotonic progress for each input partition. Highwater computes the deployment watermark from active partitions. A partition can declare itself idle so an empty source does not stop all progress; the next event reactivates it.
+`await client.stream_info(name)` returns `StreamInfo`. Its `finality` field explains the current boundary:
+
+- `pending`: no completeness frontier exists yet.
+- `lateness_cutoff`: inferred progress or idle-partition exclusion determines the frontier.
+- `source_declaration`: every unsealed partition explicitly reported enough progress to cover the frontier.
+- `sealed_input`: every partition is permanently closed; `all_event_times` is true and `complete_through` is null.
+
+`source_declared_through` reports the minimum explicit declaration across all unsealed partitions, after allowed lateness. `accepts_changes_before_frontier` identifies streams whose `accept` policy permits subsequent historical changes. Older stored partitions have no recorded declaration until they report one again.
+
+`await handle.complete_through(timestamp)` declares completeness through that time across the Process's entire input stream. It is not scoped to one key. Use it only when the producer can make that declaration.
 
 ## Late events
 
-Choose a policy per Process:
+Configure the input stream's `late_policy`: `drop` discards too-late records, `side_output` stores them separately, and `accept` admits them. Admission does not automatically correct arbitrary Python state or external effects. Supported incremental operators interpret signed changes; temporal joins disallow accepting too-late data.
 
-- `drop` rejects events older than the accepted lateness boundary;
-- `side_output` routes them for inspection or correction;
-- `update` applies a retraction and corrected result when the operator supports it.
+## Close a business key
 
-Watermarks never imply that storage is durable. They are durable progress facts used by scheduling and operators.
+For a direct-ingress Process, explicitly close a key after all its events have finished:
+
+```python
+await handle.drain()
+marker = await handle.finalize("order-123")
+```
+
+Finalization fails while that key has queued, running, or retrying events. The durable marker rejects new event IDs for the key; an identical retry of a previously accepted event ID still succeeds. Repeating `finalize` returns the same marker. `await handle.finality(key)` reads the marker, or returns `None` for an open key.
+
+Closing a key is irreversible and does not require an event-time watermark. It does not wait for output delivery, delete state, or authorize journal garbage collection. Stream-fed Processes cannot use key finalization.

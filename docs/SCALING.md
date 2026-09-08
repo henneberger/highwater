@@ -55,3 +55,11 @@ HIGHWATER_S3_CHAOS=1 PYTHONPATH=src python3 tests/test_s3_chaos.py -v
 ```
 
 Set `AWS_PROFILE` and `HIGHWATER_S3_CHAOS_URI=s3://bucket/test-prefix` to run against AWS S3 instead. Every run appends a unique prefix and removes it afterward; set `HIGHWATER_S3_CHAOS_KEEP=1` to retain the objects for inspection.
+
+## Latency targets
+
+`ProcessOptions(latency_target_seconds=...)` sets a finite positive target from server input ingestion to the Process state/output transition. Batch collection stops at the earlier of its configured delay and an eligible input's deadline. Worker polling, gates, execution time, and retry backoff can still exceed that target.
+
+Process inspection reports unfinished age and retained committed-outcome latency statistics when a target is configured. This diagnostic scans retained outcomes; its cost grows with history. The autoscaler inherits the deployed target and estimates replicas from unfinished work, remaining budget, and configured throughput, subject to partition and replica ceilings. It preserves the traffic/backlog rules and includes running and retrying work in scale-down stabilization. `--min-replicas` controls warm capacity independently.
+
+This is a per-Process target, not source freshness, external delivery latency, or a dependency-wide guarantee. See the [operator guide](../website/docs/production/scaling.mdx) for configuration and measurement boundaries.

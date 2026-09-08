@@ -244,6 +244,10 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
     }
     tokio::spawn(event_time_maintenance_loop(state.clone()));
     let internal_app = Router::new()
+        .route(
+            "/internal/v1/processes/{process_id}/keys/{key}/finalize",
+            post(finalize_process_key_local),
+        )
         .route("/internal/v1/workflow-tasks/poll", post(poll_workflow))
         .route(
             "/internal/v1/workflow-tasks/poll-batch",
@@ -367,6 +371,11 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
             "/operators/{operator_id}/changes",
             get(read_operator_changes),
         )
+        .route("/view-snapshots", post(create_view_snapshot))
+        .route(
+            "/view-snapshots/{snapshot_id}",
+            get(read_view_snapshot).delete(delete_view_snapshot),
+        )
         .route("/operator-edges", post(create_operator_edge))
         .route("/operator-edges/{operator_id}", get(get_operator_edge))
         .route("/processes", post(create_process))
@@ -388,6 +397,10 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
             post(append_packed_process_records),
         )
         .route("/processes/{process_id}/keys/{key}", get(get_process_state))
+        .route(
+            "/processes/{process_id}/keys/{key}/finalize",
+            post(finalize_process_key),
+        )
         .route(
             "/processes/{process_id}/complete-through",
             post(complete_process_through),

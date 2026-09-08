@@ -24,7 +24,9 @@ Highwater dispatches when either:
 - the batch reaches `max_size`; or
 - the oldest eligible event waits `max_delay` seconds.
 
-This keeps throughput high under load and bounds added latency when traffic is light. A scheduled deployment uses the same rule while draining a finite backlog.
+The delay bounds batch collection waiting, subject to worker polling and available execution capacity. It does not bound total input-to-result latency. A scheduled deployment uses the same rule while draining a finite backlog.
+
+With `ProcessOptions(latency_target_seconds=0.5)`, collection also stops when an eligible input reaches its ingestion-time deadline. Time already spent in a mailbox or retry counts against this budget. See [latency targets](/docs/production/scaling#admission-to-commit-latency-targets).
 
 ## Ordering and failure
 

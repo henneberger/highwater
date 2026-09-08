@@ -33,4 +33,4 @@ An invocation is a retryable attempt, not the source of truth. The durable inbox
 
 ## Composition
 
-Processes can emit events to other Processes. Cross-partition messages carry commit dependencies so downstream computation may pipeline while commit order remains recoverable. Prefer message composition over sharing mutable state across keys.
+Processes can feed other Processes through durable output edges. State and pending output commit together; an edge forwards the change before advancing downstream progress. This does not provide an atomic read across independently executing Processes. Prefer message composition over sharing mutable state across keys.

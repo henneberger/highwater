@@ -18,7 +18,11 @@ orders = await client.get_process_handle("Order")
 | `await client.get_process_handle(name)` | handle for a deployed Process |
 | `await client.deploy_process(definition, input=...)` | deploys a Process over an existing stream |
 | `await client.start(definition)` | creates an input stream and deploys a Process |
-| `await client.compare_builds(process_id, baseline=..., candidate=...)` | compares state and output over retained input |
+| `await client.compare_builds(process_id, baseline=..., candidate=...)` | compares retained input and returns a reusable replay manifest |
+| `client.view(operator_id)` | native operator result handle |
+| `await client.snapshot_views(*operator_ids)` | saves a durable result cut |
+| `await client.read_view_snapshot(snapshot_id)` | retrieves saved results |
+| `await client.delete_view_snapshot(snapshot_id)` | releases saved results |
 
 ## ProcessHandle
 
@@ -29,7 +33,9 @@ orders = await client.get_process_handle("Order")
 | `send_many(events)` | receipts in input order |
 | `state(key)` | latest committed Process state |
 | `drain()` | waits for admitted work to finish |
-| `complete_through(event_time)` | advances a Process-owned event-time boundary |
+| `complete_through(event_time)` | declares progress through an event time |
+| `finalize(key)` | closes a quiescent direct-ingress key to new events |
+| `finality(key)` | reads its durable closure declaration |
 
 ## Decorators
 
@@ -69,3 +75,5 @@ from highwater import AutoscalingPolicy, WorkloadSample, recommend_replicas
 ## Replay comparison
 
 `compare_process_builds(baseline, candidate, records, versioned_histories=...)` runs an offline comparison over `StreamRecord` values. `ReplayComparison.matches` is true when both builds produce identical state and output after every event. `ReplayComparison.differences` contains exact per-event changes.
+
+`ReplayComparison.manifest` saves the exact captured inputs, reference histories, initial state, and build identities. Load it with `ReplayManifest.from_json` and reuse it with `compare_process_builds(..., manifest=manifest)`. It does not capture external responses or establish a coherent cut across live streams.

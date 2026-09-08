@@ -7,7 +7,7 @@ Highwater groups Process keys into movable partitions. A partition has one durab
 
 ## Scale out
 
-Independent partitions run concurrently across hosts. Hot state remains close to execution, while cold state can move to lower-cost storage and load on demand.
+Independent partitions run concurrently across hosts. Owners materialize state in local RocksDB and recover it from durable journals and checkpoints.
 
 During movement, the source drains and checkpoints the partition before a higher ownership generation activates on the target. Ingestion continues through the managed endpoint and follows the new owner automatically. A delayed source cannot commit after the generation changes.
 
@@ -19,7 +19,7 @@ highwater-worker app \
   --process-partitions 1,3,5,7
 ```
 
-Each Process partition belongs to one execution instance. Durable ownership generations fence completions from an earlier assignment.
+Each partition has one service owner. Application workers lease work from that owner; ownership generations fence completions from an earlier assignment.
 
 ## Calculate a replica target
 
@@ -46,9 +46,29 @@ highwater-autoscaler \
 
 Scale-down waits for the configured stabilization period and removes one replica at a time. Replica targets never exceed the number of executable partitions. The production reference in `deploy/kubernetes/hosted.yaml` grants the autoscaler access only to its worker Deployment scale resource.
 
+## Admission-to-commit latency targets
+
+Set a target on the Process deployment:
+
+```python
+from highwater import ProcessOptions
+
+options = ProcessOptions(latency_target_seconds=0.5)
+```
+
+Pass these options to `client.deploy_process`. The target measures server input ingestion time to the Process transition that commits state and output. It includes mailbox waiting, completeness gates, execution, and retries; it excludes upstream source delay and delivery to an external destination. It is an operational target, not a hard completion guarantee.
+
+The batch scheduler caps its collection deadline at the oldest eligible input's ingestion time plus the target. Once the budget is exhausted, the next worker poll can dispatch a partial batch. This does not interrupt a running invocation or bypass event-time gates, retry backoff, or per-key ordering.
+
+`client.process(process_id)` includes a `latency` object for configured targets: oldest unfinished age, overdue unfinished count, committed mean/max latency, and committed target violations. These are diagnostics over retained outcomes, not a rolling window. Inspection scans those outcomes and becomes more expensive as history grows; use a conservative polling interval. The timestamps describe the transition recorded in the durable outcome and do not measure subsequent output delivery.
+
+The autoscaler inherits the deployed target, or accepts `--latency-target-seconds` to override its scaling target. An override requires a Process with latency telemetry enabled. It divides unfinished work by the remaining budget and configured per-replica throughput; exhausted budgets request the configured replica ceiling. Existing traffic and backlog rules can request more capacity. Set `--min-replicas` above zero to retain warm workers; the latency target alone does not prevent scale-to-zero.
+
+Hot keys, stalled sources, slow external calls, and worker startup can still miss the target. Replica estimates use configured throughput, so calibrate it against the workload. Targets apply to one Process; dependency-wide budget allocation is not automatic.
+
 ## Backpressure
 
-Capacity is communicated from execution through partition admission to producers. Highwater delays or rejects admission before a hidden queue grows without bound. SDKs retry with jitter; scheduled deployments retain already accepted input while compute is inactive.
+Mailbox capacity bounds admission. When capacity is exhausted, admission fails and the producer must retry. Already accepted input remains durable while workers are inactive.
 
 ## Hot keys
 
@@ -59,4 +79,4 @@ One non-commutative key is sequential by design. Resolve a hot key by:
 - splitting independent state into child Processes and joining their output;
 - moving expensive vector work into a size-or-latency batch.
 
-At 10x load, Highwater first uses available concurrency, then adds partition owners, then applies ingestion backpressure. It does not weaken fencing, skip durable commits, or advance watermarks to hide lag.
+Adding worker replicas does not create service partition owners or make a single key parallel. Configure service ownership separately and keep replica targets within the available partition count.

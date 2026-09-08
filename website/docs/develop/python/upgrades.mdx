@@ -1,65 +1,101 @@
 ---
-title: Safe upgrades
-description: Change Process code and state without reinterpreting in-flight work.
+title: Process upgrades
+description: Migrate keyed state and compare builds using captured replay inputs.
 ---
 
-Every deployment is immutable and versioned. Highwater records which code version and state schema own each Process activation.
-
-## Compatible changes
-
-Additive handlers and optional state fields with defaults can usually roll forward directly:
-
-```python
-@streaming.process(key="account_id", state_version=2)
-@dataclass
-class Balance:
-    total: int = 0
-    currency: str = "USD"
-```
+A Process deployment selects a build ID and state schema version. Execution records
+retain their assigned build ID, and workers advertise the builds they can run.
+Use a new build ID when changing application code.
 
 ## State migrations
 
-Declare an explicit migration when an older state needs transformation:
+Increasing `state_version` requires a declared migration for every intermediate
+version, including changes that only add fields with defaults. Define migrations
+inside the Process class:
 
 ```python
-@Balance.migrate(from_version=1)
-def add_currency(state):
-    return {"total": state["total"], "currency": "USD"}
+from dataclasses import dataclass
+from highwater import streaming
+
+@streaming.process(name="Balance", key="account_id", build_id="balance-v2", state_version=2)
+@dataclass
+class BalanceV2:
+    total: int = 0
+    currency: str = "USD"
+
+    @streaming.migrate(from_version=1)
+    def migrate_v1(self, state):
+        return {**state, "currency": "USD"}
+
+    @streaming.event
+    async def apply(self, event):
+        self.total += event.amount
+        return {"total": self.total, "currency": self.currency}
 ```
 
-Migrations are deterministic, versioned, and committed with the first event using the new schema.
+Migrations run when a key next processes an event. The migrated state commits with
+that event's successful transition. Write deterministic migrations; Highwater does
+not enforce determinism. New keys start with the class defaults.
 
-## Rollout
+## Deploy the change
 
-```bash
-highwater-worker app --target "$HIGHWATER_EXECUTION_ADDRESS"
-```
-
-The platform validates definitions, starts the new version, routes new activations only after it is ready, and drains work pinned to the previous version. Rollback changes routing; it never asks old code to decode newer state.
-
-Renaming a Process, changing its key, or changing event identity is a data migration. Deploy it as a new Process and backfill or redirect explicitly.
-
-## Compare two builds before activation
-
-Retain the Process input stream when a deployment needs replay comparison. Highwater can run the retained events and versioned reference history through two decorated Process definitions:
+Start workers that register the new definition, then update the existing Process:
 
 ```python
+handle = await client.start(BalanceV2, process_id="balances")
+```
+
+Use the existing Process ID and input configuration; for a shared input, pass the
+same `source`. Keep workers for older builds available while their assigned
+executions remain outstanding. Deployment updates the active build without a
+worker-readiness handshake or an automatic rollout/drain controller.
+
+The server rejects schema downgrades. Rolling back a same-schema build still
+requires compatible state and handlers. Changing the Process input, workflow
+name, key field, event-time field, gate, or ingress mode requires a new Process.
+
+## Compare and save replay inputs
+
+Retained input and reference history can be evaluated through two decorated
+Process definitions before deployment:
+
+```python
+from pathlib import Path
+from highwater import ReplayManifest, compare_process_builds
+
 comparison = await client.compare_builds(
     "shopping-assistant",
     baseline=ShoppingAssistantV1,
     candidate=ShoppingAssistantV2,
 )
-
 for difference in comparison.differences:
-    print(
-        difference.event_id,
-        difference.baseline_state,
-        difference.candidate_state,
-        difference.baseline_output,
-        difference.candidate_output,
-    )
+    print(difference.event_id, difference.baseline_output, difference.candidate_output)
+
+Path("comparison.json").write_text(comparison.manifest.to_json())
+manifest = ReplayManifest.from_json(Path("comparison.json").read_text())
+repeated = await compare_process_builds(
+    ShoppingAssistantV1, ShoppingAssistantV2, manifest=manifest,
+)
 ```
 
-Comparison writes no Process state or output. Each difference identifies the original event and key. Versioned lookups resolve at the original event time.
+The manifest captures ordered records, reference histories, initial keyed state and
+its version, and both build IDs and target schema versions. Its SHA-256 checksum
+is verified when loaded. Reuse checks build IDs and versions and reads no live
+streams. Preserve the matching code and dependencies: build IDs are labels, not
+code authentication.
 
-The comparison executes both handlers. Supply recorded responses or evaluation implementations for model, tool, and service calls. This keeps external effects out of the comparison and makes nondeterministic dependencies repeatable.
+By default, replay starts from class defaults. To compare a selected input suffix,
+call `compare_process_builds` with those records, `versioned_histories`,
+`initial_states={key: state}`, and `initial_state_version`. The supplied state must
+precede the first record. Each build gets an independent copy and applies its
+migrations. Differences report state and output after each event.
+
+The client captures retained input and reference histories through separate
+reads; this is not a coherent snapshot across live streams. Versioned lookups use
+the captured history at the original event time. Replay does not simulate
+admission, watermark waiting, retries, or output delivery.
+
+The helper writes no state or outputs to Highwater, but it executes application
+code. External calls, clocks, and randomness are not recorded or intercepted;
+use recorded responses or evaluation implementations for repeatable comparisons.
+Store manifests with the same access controls as their captured data.

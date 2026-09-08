@@ -51,8 +51,24 @@ class Account:
         return {"account_id": event.account_id, "complete": True}
 ```
 
-An event remains in the durable Process inbox until the source watermark reaches its event timestamp. Waiting events do not hold worker capacity.
+An event remains in the durable inbox until the input completeness frontier (watermark minus allowed lateness) reaches its timestamp. Sealing input releases the remaining events. This is finality under the source policy, not proof that no historical event can arrive. Waiting events do not hold worker capacity.
 
 ## Hot keys
 
 Ordering means one key cannot commit two conflicting transitions concurrently. Choose the narrowest key that preserves the invariant you need. Split a globally keyed Process only when the state can be partitioned safely.
+
+## Close a business key
+
+For a direct-ingress Process, wait for its work to finish before closing a key:
+
+```python
+await handle.drain(timeout=30)
+marker = await handle.finalize("account-a")
+assert await handle.finality("account-a") == marker
+```
+
+Finalization rejects new event IDs for that key and survives restart. Identical
+retries remain valid. The engine rejects finalization while that key has pending,
+running, or retrying events; draining the Process first is convenient but not
+required for other keys. There is no reopen operation. Finalization does not
+wait for external output delivery or delete retained history.

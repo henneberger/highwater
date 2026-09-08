@@ -1,32 +1,52 @@
 ---
 title: Process options
-description: Process, event-time, batching, and deployment options.
+description: Supported Process, event-time, and batching configuration.
 ---
 
 ## Process definition
 
+`@streaming.process(...)` accepts:
+
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `key` | required | event field or callable selecting the Process key |
-| `state_version` | `1` | durable state schema version |
-| `event_time` | none | event timestamp field or callable |
-| `wait_until` | immediate | eligibility gate |
-| `late_events` | `"side_output"` | `drop`, `side_output`, or `update` |
-| `allowed_lateness` | `0` | time retained for supported revisions |
+| `name` | class name | Process type name |
+| `key` | none | dotted event field selecting the key |
+| `state_version` | `1` | positive durable state schema version |
+| `build_id` | derived from code | build identity |
+| `event_time` | none | dotted event timestamp field |
+| `wait_until` | immediate | `streaming.complete` waits for the completeness frontier |
+
+## Process deployment
+
+Pass `ProcessOptions(...)` to `client.start` or `client.deploy_process`.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `key` | definition key | override key field |
+| `event_time_gate` | immediate | eligibility gate when explicit options are supplied |
+| `max_concurrency` | `64` | concurrent normal keys |
+| `capacity` | `10000` | mailbox capacity |
+| `retry_concurrency` | `8` | separate retry capacity |
+| `max_attempts` | `5` | terminal failure after this attempt budget |
+| `batch_size`, `batch_delay` | handler defaults | batch collection size and delay in seconds |
+| `latency_target_seconds` | none | positive input-ingestion-to-commit target for batching and autoscaling |
+| `discard_input_on_success` | `False` | discard successful input/history; limits replay |
+| `task_queue` | `default` | worker routing queue |
+
+Supplying options replaces the default gate taken from the decorator. Include
+`event_time_gate=EventTimeGate.COMPLETE` when that gate is required. A latency
+target does not bypass the gate or guarantee a completion deadline.
 
 ## Batch handler
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `max_size` | required | largest application batch |
-| `max_delay` | required | maximum wait for the oldest eligible event |
+`@streaming.batch(max_size=128, max_delay=0.01)` declares vectorized execution.
+`max_size` must be 1–1024; `max_delay` is a nonnegative collection delay in
+seconds, not an end-to-end latency guarantee.
 
-## Deployment
+## Source progress
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--schedule` | continuous | cron schedule controlling compute drains |
-| `--env NAME=VALUE` | none | non-secret application configuration |
-| `--secret NAME` | none | secret mounted from the deployment environment |
-
-Durability, partitions, lease periods, checkpoint cadence, and storage tiers are service policy rather than application options.
+Configure source policy through `StreamOptions`, not the Process decorator:
+`watermark_mode`, `max_out_of_orderness`, `idle_timeout`, `allowed_lateness`,
+`alignment_max_drift`, and `late_policy`. The late policies are `drop`,
+`side_output`, and `accept`. Accepting historical changes does not automatically
+reverse arbitrary Python effects.

@@ -15,6 +15,7 @@ mod storage;
 mod stream_api;
 mod stream_engine;
 mod streaming;
+mod views;
 mod workflow;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -71,6 +72,7 @@ use state::*;
 use storage::*;
 use stream_api::*;
 use stream_engine::*;
+use views::*;
 use workflow::*;
 
 pub use runtime::{run, run_with_args};

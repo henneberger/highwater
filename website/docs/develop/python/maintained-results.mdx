@@ -1,0 +1,62 @@
+---
+title: Maintained results
+description: Read native operator rows and retain a consistent result cut.
+---
+
+Native operator output can be read as rows without interpreting its changelog.
+`client.view(operator_id)` refers to an existing native filter, window,
+deduplication, interval-join, or temporal-join operator. It does not create an
+operator or run Python code.
+
+```python
+rows = await client.view("positive-balances").get("account-a")
+for row in rows:
+    print(row.value, row.count)
+```
+
+Rows are identified by their key and complete JSON value. `count` is the positive
+multiplicity of that row, not a last-write-wins version. Updates require a
+matching before/after pair; deletes retract an identical earlier row. Repeated
+inserts or upserts add multiplicity. Unmatched retractions cause reads to fail
+rather than silently fabricate a table. Custom Python transitions and external
+effects are not automatically reversible.
+
+## Save a read cut
+
+```python
+snapshot = await client.snapshot_views("positive-balances", "large-balances")
+small = snapshot.rows("positive-balances")
+large = snapshot.rows("large-balances")
+
+# Reuses the saved rows even after input changes or the service restarts.
+same = await client.read_view_snapshot(snapshot.snapshot_id)
+await client.delete_view_snapshot(snapshot.snapshot_id)
+```
+
+Multiple views must be active native filters over the same source stream with
+matching historical input counts. Ambiguous operator identifiers and mismatched
+backfill coverage are rejected. Their updates
+run in the source admission transaction, so capture records both results and the
+source partition positions under the same control-shard transaction. The
+`shared_input_cut` guarantee concerns their shared retained/backfilled input under
+the source late-data policy, not the entire original history, identical event times,
+source completeness, or consistency with another external database. Unsupported
+combinations are rejected.
+
+A single native operator uses `operator_output_cut`: the saved rows reflect its
+published output at capture. A window can still be waiting for finalization and
+a join for source progress. This does not imply that all admitted inputs have
+produced output. Process outputs and arbitrary cross-Process snapshots are not
+supported by this API.
+
+Saved snapshots are journaled and included in recovery. Their identifiers retain
+the captured values until explicitly deleted; `view.get(key)` creates and deletes
+a temporary snapshot automatically. An uncertain capture response can leave an
+unused snapshot, so retain identifiers for explicit lifecycle management when
+using saved reads.
+
+The initial implementation folds retained changelogs during capture and stores
+the result. It supports at most 32 operators and 10,000 distinct output rows per
+operator. Capture cost grows with changelog history and holds the control-shard
+transaction while reading; use it for bounded results and occasional consistent
+reads. It is not an indexed query service or an incremental view optimizer.

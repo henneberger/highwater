@@ -139,7 +139,7 @@ class DailyBalance:
     total: int = 0
 ```
 
-`streaming.complete` runs an event only after Highwater knows the input is complete through that timestamp. The platform owns source progress, idleness, late-data policy, and watermark coordination.
+`streaming.complete` waits until source progress passes the event timestamp under the configured lateness policy. Inferred watermarks and idle timeouts are policy cutoffs; sealed input or explicit source declarations provide stronger finality. Stream inspection reports the basis. The platform manages progress and watermark coordination.
 
 Highwater also provides native incremental filters, windows, deduplication, interval joins, and temporal as-of joins. Use them for common state machines and keep application-specific decisions in Python.
 
@@ -228,7 +228,15 @@ for difference in comparison.differences:
     print(difference.event_id, difference.baseline_output, difference.candidate_output)
 ```
 
-Versioned stream reads resolve from retained history at the original event time. Application code runs during comparison, so calls to external systems should use recorded responses or an evaluation implementation.
+Versioned stream reads resolve from retained history at the original event time. Each comparison includes a saveable `ReplayManifest` with its input, reference histories, initial state, and build IDs. Application code runs during comparison, so calls to external systems should use recorded responses or an evaluation implementation. See [reproducible build comparison](docs/REPLAY.md) for capture and reuse boundaries.
+
+## Result and execution contracts
+
+- Set `ProcessOptions(latency_target_seconds=0.5)` to cap batch waiting and inform autoscaling from unfinished event age. Process inspection reports latency and missed targets; this is a scheduling target, not a deadline guarantee.
+- After a direct-ingress key drains, `await handle.finalize(key)` durably closes it to new events while preserving identical event retries. `await handle.finality(key)` reads the declaration.
+- Read native operator output through `client.view(operator_id)`. Saved snapshots retain a result across updates and restarts; a shared read cut currently supports native filters over the same source.
+
+See [scaling](docs/SCALING.md), [event-time semantics](docs/STREAMING_MODEL.md), and [maintained results](docs/MAINTAINED_RESULTS.md) for guarantees and limits.
 
 ## Hosted and sandboxed workers
 

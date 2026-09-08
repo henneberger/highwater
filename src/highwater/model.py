@@ -146,6 +146,7 @@ class StreamInfo:
     max_event_time: float | None
     partitions: list[dict[str, Any]]
     watermark_diagnostics: dict[str, Any]
+    finality: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -169,9 +170,14 @@ class ProcessSpec:
     discard_input_on_success: bool = False
     batch_size: int = 64
     batch_delay: float = 0.005
+    latency_target_seconds: float | None = None
     task_queue: str = "default"
 
     def __post_init__(self) -> None:
+        if self.latency_target_seconds is not None and (
+            not isfinite(self.latency_target_seconds) or self.latency_target_seconds <= 0
+        ):
+            raise ValueError("latency_target_seconds must be finite and positive")
         if not self.process_id.strip() or not self.input.strip() or not self.build_id.strip():
             raise ValueError("process_id, input, and build_id must not be empty")
         if self.state_version <= 0:
@@ -220,9 +226,14 @@ class ProcessOptions:
     discard_input_on_success: bool = False
     batch_size: int | None = None
     batch_delay: float | None = None
+    latency_target_seconds: float | None = None
     task_queue: str = "default"
 
     def __post_init__(self) -> None:
+        if self.latency_target_seconds is not None and (
+            not isfinite(self.latency_target_seconds) or self.latency_target_seconds <= 0
+        ):
+            raise ValueError("latency_target_seconds must be finite and positive")
         if self.key is not None and not self.key.strip():
             raise ValueError("key must not be empty")
         if (

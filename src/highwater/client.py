@@ -35,7 +35,7 @@ from .model import (
     WorkflowOptions,
     WorkflowStatus,
 )
-from .replay import ReplayComparison, compare_process_builds
+from .replay import ReplayComparison, ReplayManifest, compare_process_builds
 
 
 def _timestamp(value: float | datetime) -> float:
@@ -283,6 +283,19 @@ class ProcessHandle:
 
     async def info(self) -> dict[str, Any]:
         return await self.client.process(self.id)
+
+    async def finality(self, key: str) -> dict[str, Any] | None:
+        """Return the durable business finalization marker, if the key is closed."""
+        value = await self.client._request(
+            "GET", f"/processes/{quote(self.id, safe='')}/keys/{quote(key, safe='')}",
+        )
+        return value.get("finality")
+
+    async def finalize(self, key: str) -> dict[str, Any]:
+        """Irreversibly close a quiescent direct-ingress key to new events."""
+        return await self.client._request(
+            "POST", f"/processes/{quote(self.id, safe='')}/keys/{quote(key, safe='')}/finalize", {},
+        )
 
     async def complete_through(self, event_time: float | datetime) -> None:
         await self.client._request(
@@ -665,6 +678,8 @@ class Client:
                 "discard_input_on_success": spec.discard_input_on_success,
                 "batch_max_size": spec.batch_size,
                 "batch_max_delay": spec.batch_delay,
+                **({"latency_target_seconds": spec.latency_target_seconds}
+                   if spec.latency_target_seconds is not None else {}),
             })
         if isinstance(spec, WindowAggregateSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
@@ -771,7 +786,7 @@ class Client:
             self,
             identifier,
             input,
-            selected.key,
+            selected.key or getattr(definition, "__highwater_process_key__"),
             getattr(definition, "__highwater_process_event_time__"),
         )
 
@@ -877,7 +892,15 @@ class Client:
         *,
         baseline: type[Any],
         candidate: type[Any],
+        initial_states: dict[str, Any] | None = None,
+        initial_state_version: int | None = None,
+        manifest: ReplayManifest | None = None,
     ) -> ReplayComparison:
+        if manifest is not None:
+            return await compare_process_builds(
+                baseline, candidate, manifest=manifest, initial_states=initial_states,
+                initial_state_version=initial_state_version,
+            )
         process = await self.process(process_id)
         records = await self.read_stream(process["stream"])
         if process.get("discard_input_on_success") and process.get("completed", 0) > len(records):
@@ -897,6 +920,8 @@ class Client:
             candidate,
             records,
             versioned_histories=histories,
+            initial_states=initial_states,
+            initial_state_version=initial_state_version,
         )
 
     async def stream_filter(self, operator_id: str) -> dict[str, Any]:
@@ -908,6 +933,27 @@ class Client:
         return await self._request(
             "GET", f"/stream-filters/{quote(operator_id, safe='')}/outputs",
         )
+
+    def view(self, operator_id: str):
+        """Access a native operator's materialized output."""
+        from .views import MaterializedView
+        return MaterializedView(self, operator_id)
+
+    async def snapshot_views(self, *operator_ids: str):
+        """Save a durable output cut; multiple views require filters on one source."""
+        from .views import ViewSnapshot
+        return ViewSnapshot.from_dict(await self._request(
+            "POST", "/view-snapshots", {"operators": list(operator_ids)},
+        ))
+
+    async def read_view_snapshot(self, snapshot_id: str):
+        from .views import ViewSnapshot
+        return ViewSnapshot.from_dict(await self._request(
+            "GET", f"/view-snapshots/{quote(snapshot_id, safe='')}",
+        ))
+
+    async def delete_view_snapshot(self, snapshot_id: str) -> None:
+        await self._request("DELETE", f"/view-snapshots/{quote(snapshot_id, safe='')}")
 
     async def read_operator_changes(self, operator_id: str) -> list[dict[str, Any]]:
         return await self._request(

@@ -1,4 +1,5 @@
 use crate::maintenance::maintain_event_time;
+use crate::streaming::finality_status;
 use crate::*;
 pub(crate) async fn create_stream(
     State(app): State<AppState>,
@@ -78,6 +79,7 @@ pub(crate) async fn get_stream(
         "config": config,
         "watermark": state.watermark,
         "finalized": state.finalized,
+        "finality": finality_status(&config, &state, &partitions),
         "max_event_time": state.max_event_time,
         "partitions": partitions,
         "watermark_diagnostics": {

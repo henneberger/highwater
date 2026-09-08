@@ -149,6 +149,9 @@ pub struct PartitionState {
     pub next_offset: u64,
     pub max_event_time: Option<f64>,
     pub watermark: Option<f64>,
+    /// Last explicitly reported watermark, excluding inferred event-time progress.
+    #[serde(default)]
+    pub declared_watermark: Option<f64>,
     pub last_activity_at: f64,
     pub idle: bool,
     pub sealed: bool,
@@ -161,6 +164,7 @@ impl PartitionState {
             next_offset: 0,
             max_event_time: None,
             watermark: None,
+            declared_watermark: None,
             last_activity_at: now,
             idle: false,
             sealed: false,
@@ -209,6 +213,7 @@ impl PartitionState {
             bail!("partition watermarks cannot move backwards");
         }
         self.watermark = Some(watermark);
+        self.declared_watermark = Some(watermark);
         self.last_activity_at = now;
         self.idle = false;
         Ok(())
@@ -521,6 +526,53 @@ pub fn completeness_frontier(config: &StreamConfig, state: &StreamState) -> Opti
     }
 }
 
+/// Explain the gate boundary without treating inferred progress as source knowledge.
+/// Explicit source progress includes idle partitions: idleness is only a policy.
+pub fn finality_status(
+    config: &StreamConfig,
+    state: &StreamState,
+    partitions: &[PartitionState],
+) -> Value {
+    let open = partitions
+        .iter()
+        .filter(|partition| !partition.sealed)
+        .collect::<Vec<_>>();
+    let declared_through = if !open.is_empty()
+        && open
+            .iter()
+            .all(|partition| partition.declared_watermark.is_some())
+    {
+        open.iter()
+            .filter_map(|partition| partition.declared_watermark)
+            .reduce(f64::min)
+            .map(|watermark| watermark - config.allowed_lateness)
+    } else {
+        None
+    };
+    let frontier = completeness_frontier(config, state);
+    let basis = if state.finalized {
+        "sealed_input"
+    } else if frontier.is_none() {
+        "pending"
+    } else if declared_through
+        .zip(frontier)
+        .is_some_and(|(declared, current)| declared >= current)
+    {
+        "source_declaration"
+    } else {
+        "lateness_cutoff"
+    };
+    serde_json::json!({
+        "basis": basis,
+        "complete_through": if state.finalized { None } else { frontier },
+        "all_event_times": state.finalized,
+        "source_declared_through": declared_through,
+        "late_policy": config.late_policy,
+        "accepts_changes_before_frontier": !state.finalized && config.late_policy == LatePolicy::Accept,
+        "idle_partitions": open.iter().filter(|partition| partition.idle).map(|partition| partition.partition).collect::<Vec<_>>(),
+    })
+}
+
 pub fn temporal_join_frontier(
     probe_config: &StreamConfig,
     probe_state: &StreamState,
@@ -654,6 +706,62 @@ mod tests {
             late_policy: LatePolicy::SideOutput,
             created_at: 0.0,
         }
+    }
+
+    #[test]
+    fn finality_distinguishes_inference_declaration_and_sealing() {
+        let mut config = config();
+        let mut partitions = vec![PartitionState::new(0, 0.0), PartitionState::new(1, 0.0)];
+        let mut state = StreamState::new(0.0);
+        assert_eq!(
+            finality_status(&config, &state, &partitions)["basis"],
+            "pending"
+        );
+        for partition in &mut partitions {
+            partition.observe(20.0, 5.0, true, 1.0).unwrap();
+        }
+        state.refresh(&config, &mut partitions, 1.0);
+        let status = finality_status(&config, &state, &partitions);
+        assert_eq!(status["basis"], "lateness_cutoff");
+        assert_eq!(status["complete_through"], 13.0);
+        for partition in &mut partitions {
+            partition.advance_watermark(15.0, 2.0).unwrap();
+        }
+        assert_eq!(
+            finality_status(&config, &state, &partitions)["basis"],
+            "source_declaration"
+        );
+        partitions[1].idle = true;
+        partitions[0].advance_watermark(25.0, 3.0).unwrap();
+        state.refresh(&config, &mut partitions, 3.0);
+        assert_eq!(
+            finality_status(&config, &state, &partitions)["basis"],
+            "lateness_cutoff"
+        );
+        config.late_policy = LatePolicy::Accept;
+        assert_eq!(
+            finality_status(&config, &state, &partitions)["accepts_changes_before_frontier"],
+            true
+        );
+        for partition in &mut partitions {
+            partition.sealed = true;
+        }
+        state.refresh(&config, &mut partitions, 4.0);
+        let status = finality_status(&config, &state, &partitions);
+        assert_eq!(status["basis"], "sealed_input");
+        assert_eq!(status["all_event_times"], true);
+        assert!(status["complete_through"].is_null());
+        assert_eq!(status["accepts_changes_before_frontier"], false);
+    }
+
+    #[test]
+    fn old_partition_state_has_no_invented_source_declaration() {
+        let value = serde_json::json!({
+            "partition": 0, "next_offset": 0, "max_event_time": null,
+            "watermark": 10.0, "last_activity_at": 0.0, "idle": false, "sealed": false,
+        });
+        let state: PartitionState = serde_json::from_value(value).unwrap();
+        assert_eq!(state.declared_watermark, None);
     }
 
     #[test]

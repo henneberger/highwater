@@ -79,7 +79,7 @@ def _process_node(
         migrations_from=getattr(definition, "__highwater_migrations_from__"),
         versioned_streams=getattr(definition, "__highwater_versioned_streams__", ()),
         versioned_lookups=getattr(definition, "__highwater_versioned_lookups__", ()),
-        key=selected.key,
+        key=selected.key or getattr(definition, "__highwater_process_key__"),
         event_time=getattr(definition, "__highwater_process_event_time__"),
         event_time_gate=selected.event_time_gate,
         max_concurrency=selected.max_concurrency,
@@ -90,6 +90,7 @@ def _process_node(
         discard_input_on_success=selected.discard_input_on_success,
         batch_size=batch_size,
         batch_delay=batch_delay,
+        latency_target_seconds=selected.latency_target_seconds,
         task_queue=selected.task_queue,
     )
 

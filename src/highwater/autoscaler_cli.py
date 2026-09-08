@@ -17,6 +17,10 @@ def _sample(process: dict, observed_at: float) -> WorkloadSample:
         pending=int(process["pending"]),
         running=int(process["running"]),
         completed=int(process["completed"]),
+        retrying=int(process.get("retrying", 0)),
+        oldest_unfinished_age_seconds=process.get("latency", {}).get(
+            "oldest_unfinished_age_seconds"
+        ),
     )
 
 
@@ -30,7 +34,11 @@ async def run(arguments: argparse.Namespace) -> None:
     current_replicas = (
         await asyncio.to_thread(kubernetes.get, arguments.kubernetes_deployment)
     ).replicas if kubernetes else arguments.current_replicas
-    previous = _sample(await client.process(arguments.process), time.time())
+    process = await client.process(arguments.process)
+    latency_target = arguments.latency_target_seconds
+    if latency_target is None:
+        latency_target = process.get("latency_target_seconds")
+    previous = _sample(process, time.time())
     seconds_below_target = arguments.seconds_below_target
     while True:
         await asyncio.sleep(arguments.sample_interval)
@@ -45,6 +53,7 @@ async def run(arguments: argparse.Namespace) -> None:
                 max_replicas=arguments.max_replicas,
                 target_events_per_second_per_replica=arguments.target_events_per_second,
                 target_backlog_per_replica=arguments.target_backlog,
+                latency_target_seconds=latency_target,
                 headroom=arguments.headroom,
                 scale_down_after=arguments.scale_down_after,
             ),
@@ -70,7 +79,8 @@ async def run(arguments: argparse.Namespace) -> None:
             current_replicas = decision.desired_replicas
         seconds_below_target = (
             seconds_below_target + arguments.sample_interval
-            if current.pending == 0 and decision.reason != "traffic"
+            if (current.pending + current.running + current.retrying == 0
+                and decision.reason != "traffic")
             else 0
         )
         previous = current
@@ -89,6 +99,10 @@ def main() -> None:
     parser.add_argument("--max-replicas", type=int, default=64)
     parser.add_argument("--target-events-per-second", type=float, default=5_000)
     parser.add_argument("--target-backlog", type=int, default=5_000)
+    parser.add_argument(
+        "--latency-target-seconds", type=float,
+        help="Override the Process admission-to-commit target; requires server latency telemetry",
+    )
     parser.add_argument("--headroom", type=float, default=1.25)
     parser.add_argument("--scale-down-after", type=float, default=300)
     parser.add_argument("--seconds-below-target", type=float, default=0)

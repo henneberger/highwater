@@ -301,6 +301,8 @@ pub(crate) struct CreateProcessRequest {
     pub(crate) batch_max_size: u32,
     #[serde(default = "default_process_batch_delay")]
     pub(crate) batch_max_delay: f64,
+    #[serde(default)]
+    pub(crate) latency_target_seconds: Option<f64>,
 }
 
 pub(crate) fn default_process_batch_size() -> u32 {
@@ -424,6 +426,8 @@ pub(crate) struct DurableProcess {
     pub(crate) discard_input_on_success: bool,
     pub(crate) batch_max_size: u32,
     pub(crate) batch_max_delay: f64,
+    #[serde(default)]
+    pub(crate) latency_target_seconds: Option<f64>,
     pub(crate) status: String,
     pub(crate) created_at: f64,
     pub(crate) pending: u64,

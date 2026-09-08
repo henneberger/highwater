@@ -418,10 +418,16 @@ pub(crate) async fn poll_workflow_batch(
                     && task.task_queue == task_queue
             })
             .count();
-        if batch_group.is_some()
-            && available < max_size
-            && timestamp < first.enqueued_at + first.batch_max_delay
-        {
+        let batch_deadline = eligible
+            .iter()
+            .filter(|(_, task)| {
+                task.batch_group == batch_group
+                    && task.build_id == build_id
+                    && task.task_queue == task_queue
+            })
+            .map(|(_, task)| task.enqueued_at + task.batch_max_delay)
+            .fold(f64::INFINITY, f64::min);
+        if batch_group.is_some() && available < max_size && timestamp < batch_deadline {
             return Ok(());
         }
         for (key, mut task) in eligible

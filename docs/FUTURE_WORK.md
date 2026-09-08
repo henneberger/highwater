@@ -22,6 +22,13 @@ Do not add more language SDKs or a cluster control plane until the first four it
 
 ## Streaming operator follow-ups
 
+Native normalization, general retractable top-N, indexed collection outputs, and
+scoped changelog capability validation are implemented; see
+[collections](COLLECTIONS.md). Remaining shared-model work includes migration of
+legacy operators, consolidated weights, richer time/progress policies, bounded
+edge scheduling, and execution on partition owners.
+
+
 The [changelog workflow assessment](CHANGELOG_WORKFLOWS.md) maps Flink's streaming
 operator families to a proposed shared contract and gives the implementation
 sequence for native retractable top-N. It identifies mode validation, row/time

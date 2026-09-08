@@ -67,6 +67,7 @@ fn capture(transaction: &Transaction<'_>, operators: &[String]) -> Result<ViewSn
         // Operator types have separate registration namespaces but share a changelog.
         // Refuse collisions rather than assign another operator's rows to this view.
         let definitions = [
+            relational_key(&id),
             stream_schedule_key(&id),
             stream_filter_key(&id),
             deduplicate_key(&id),
@@ -119,12 +120,38 @@ fn capture(transaction: &Transaction<'_>, operators: &[String]) -> Result<ViewSn
                 .collect::<Result<Vec<_>>>()?;
             input_positions.insert(stream, partitions);
         }
-        let changes = transaction
-            .scan::<DifferentialChange>(&operator_change_prefix(&id))?
-            .into_iter()
-            .map(|(_, change)| change)
-            .collect();
-        let rows = materialize(changes)?;
+        let rows = if transaction
+            .get::<RelationalSpec>(&relational_key(&id))?
+            .is_some()
+        {
+            // Read current indexed output, not retained changelog history.
+            let indexed =
+                transaction.scan_limit::<CollectionRow>(&maintained_prefix(&id), 10_001)?;
+            if indexed.len() > 10_000 {
+                bail!("view snapshot exceeds 10000 indexed rows per operator");
+            }
+            materialize(
+                indexed
+                    .into_iter()
+                    .map(|(_, row)| DifferentialChange {
+                        operator_id: id.clone(),
+                        sequence: 0,
+                        key: row.key,
+                        row: row.value,
+                        event_time: row.event_time,
+                        kind: ChangeKind::Insert,
+                        diff: row.count,
+                    })
+                    .collect(),
+            )?
+        } else {
+            let changes = transaction
+                .scan::<DifferentialChange>(&operator_change_prefix(&id))?
+                .into_iter()
+                .map(|(_, change)| change)
+                .collect();
+            materialize(changes)?
+        };
         if rows.len() > 10_000 {
             bail!("view snapshot exceeds 10000 distinct rows per operator");
         }

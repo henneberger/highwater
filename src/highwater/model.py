@@ -405,3 +405,64 @@ class ActivationResult:
     blocked: bool
     instance: Any
     history_event_id: int
+
+
+class CollectionMode(StrEnum):
+    """Input semantics for native collection operators; legacy streams are unchanged."""
+    APPEND = "append"
+    RETRACT = "retract"
+    UPSERT = "upsert"
+
+
+def _collection_fields(value, name):
+    if isinstance(value, str):
+        raise ValueError(f"{name} must be a sequence of field names")
+    result = tuple(value)
+    if any(not isinstance(item, str) or not item.strip() for item in result) or len(set(result)) != len(result):
+        raise ValueError(f"{name} fields must be nonempty and unique")
+    return result
+
+
+@dataclass(frozen=True)
+class NormalizeSpec:
+    operator_id: str
+    stream: str
+    primary_key: tuple[str, ...]
+    input_mode: CollectionMode = CollectionMode.UPSERT
+
+    def __post_init__(self):
+        if not self.operator_id.strip() or not self.stream.strip():
+            raise ValueError("operator_id and stream must not be empty")
+        object.__setattr__(self, "primary_key", _collection_fields(self.primary_key, "primary_key"))
+        if not self.primary_key:
+            raise ValueError("normalization requires primary_key fields")
+        object.__setattr__(self, "input_mode", CollectionMode(self.input_mode))
+        if self.input_mode == CollectionMode.APPEND:
+            raise ValueError("normalization requires upsert or retract mode")
+
+
+@dataclass(frozen=True)
+class TopNSpec:
+    operator_id: str
+    stream: str
+    order_by: tuple[tuple[str, str], ...]
+    n: int
+    partition_by: tuple[str, ...] = ()
+    primary_key: tuple[str, ...] = ()
+    input_mode: CollectionMode = CollectionMode.RETRACT
+
+    def __post_init__(self):
+        if not self.operator_id.strip() or not self.stream.strip():
+            raise ValueError("operator_id and stream must not be empty")
+        if type(self.n) is not int or not 1 <= self.n <= 10_000:
+            raise ValueError("n must be an integer between 1 and 10000")
+        object.__setattr__(self, "partition_by", _collection_fields(self.partition_by, "partition_by"))
+        object.__setattr__(self, "primary_key", _collection_fields(self.primary_key, "primary_key"))
+        object.__setattr__(self, "input_mode", CollectionMode(self.input_mode))
+        if self.input_mode == CollectionMode.UPSERT and not self.primary_key:
+            raise ValueError("upsert mode requires a primary_key")
+        order = tuple(tuple(item) for item in self.order_by)
+        if not order or any(len(item) != 2 or item[1] not in {"asc", "desc"} for item in order):
+            raise ValueError("order_by requires (field, asc/desc) pairs")
+        _collection_fields([item[0] for item in order], "order_by")
+        object.__setattr__(self, "order_by", order)

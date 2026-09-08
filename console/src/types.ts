@@ -34,7 +34,9 @@ export type Operator = {
   emitted?: number;
   matched?: number;
   suppressed?: number;
-  workflow_type: string;
+  workflow_type?: string | null;
+  output_stream?: string | null;
+  n?: number | null;
   join_type?: string;
   probe_watermark?: number;
   version_watermark?: number;

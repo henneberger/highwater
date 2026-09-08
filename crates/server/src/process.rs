@@ -3,6 +3,7 @@ pub(crate) fn refresh_declarative_operators(
     transaction: &mut Transaction<'_>,
     record: Option<&StreamRecord>,
 ) -> Result<()> {
+    refresh_relational(transaction, record)?;
     refresh_stream_filters(transaction, record)?;
     refresh_temporal_joins(transaction, record)?;
     refresh_interval_joins(transaction, record)?;
@@ -905,6 +906,7 @@ pub(crate) async fn create_process(
                 transaction.put(ready_key, &true)?;
             }
         }
+        reject_relational_id(transaction, &process.process_id)?;
         let storage_key = process_key(&process.process_id);
         if let Some(mut existing) = transaction.get::<DurableProcess>(&storage_key)? {
             if existing.stream == process.stream

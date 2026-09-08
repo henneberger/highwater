@@ -3,6 +3,9 @@ pub(crate) fn operator_input_streams(
     transaction: &Transaction<'_>,
     operator_id: &str,
 ) -> Result<Vec<String>> {
+    if let Some(spec) = transaction.get::<RelationalSpec>(&relational_key(operator_id))? {
+        return Ok(vec![spec.stream]);
+    }
     if let Some(process) = transaction.get::<DurableProcess>(&process_key(operator_id))? {
         let mut inputs = vec![process.stream];
         inputs.extend(process.versioned_streams);
@@ -32,6 +35,13 @@ pub(crate) fn operator_frontier(
     transaction: &Transaction<'_>,
     operator_id: &str,
 ) -> Result<Option<f64>> {
+    if let Some(spec) = transaction.get::<RelationalSpec>(&relational_key(operator_id))? {
+        // A future deletion can promote an old candidate or retract an old version.
+        return Ok(transaction
+            .get::<StreamState>(&stream_state_key(&spec.stream))?
+            .filter(|state| state.finalized)
+            .map(|_| f64::MAX));
+    }
     if let Some(process) = transaction.get::<DurableProcess>(&process_key(operator_id))?
         && process_has_pending_work(
             process.pending,
@@ -103,6 +113,9 @@ pub(crate) fn append_internal_stream_change(
     edge: &OperatorEdge,
     change: &DifferentialChange,
 ) -> Result<()> {
+    if change.diff != change.kind.weight() {
+        bail!("native edges currently require unit weights matching the row kind");
+    }
     let config = transaction
         .get::<StreamConfig>(&stream_config_key(&edge.output_stream))?
         .ok_or_else(|| anyhow!("edge output stream missing: {}", edge.output_stream))?;

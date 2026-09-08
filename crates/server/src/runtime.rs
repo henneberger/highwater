@@ -361,6 +361,12 @@ pub async fn run_with_args(arguments: impl IntoIterator<Item = String>) -> Resul
             "/deduplicates/{operator_id}/outputs",
             get(read_deduplicate_outputs),
         )
+        .route("/relational-operators", post(create_relational))
+        .route("/relational-operators/{operator_id}", get(get_relational))
+        .route(
+            "/relational-operators/{operator_id}/rows",
+            get(read_collection_rows),
+        )
         .route("/stream-filters", post(create_stream_filter))
         .route("/stream-filters/{operator_id}", get(get_stream_filter))
         .route(

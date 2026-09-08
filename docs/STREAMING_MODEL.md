@@ -23,6 +23,14 @@ Streams support three watermark modes:
 
 The stream watermark is the monotonic minimum across active partitions. Idle partitions are excluded, sealed partitions cannot reopen, allowed lateness determines the completeness frontier, and alignment applies backpressure to sources that outrun their peers. Stream inspection reports the blocking partitions and reason progress is stalled.
 
+## Native collections
+
+[Native changelog collections](COLLECTIONS.md) add reusable primary-key
+normalization, counted ordered top-N, and indexed current-result reads. They
+require no workflow worker. Their explicit input modes preserve legacy stream
+semantics, and their output frontier waits for sealed input because an old row
+can still be retracted or promoted.
+
 ## Incremental operators
 
 Window count, sum, and max are maintained incrementally. Insert-like records add weight; `update_before` and `delete` retract weight. Max windows retain a value multiset so retracting the current maximum reveals the correct previous maximum. Each state transition is available from `/operators/{operator_id}/changes` as a durable differential changelog.

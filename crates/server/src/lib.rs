@@ -9,6 +9,7 @@ mod operators;
 mod process;
 #[cfg(test)]
 mod process_simulation;
+mod relational;
 mod runtime;
 mod state;
 mod storage;
@@ -68,6 +69,7 @@ use maintenance::*;
 use model::*;
 use operators::*;
 use process::*;
+use relational::*;
 use state::*;
 use storage::*;
 use stream_api::*;

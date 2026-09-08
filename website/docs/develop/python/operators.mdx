@@ -3,7 +3,10 @@ title: Streaming operations
 description: Express stateful stream work in Process handlers.
 ---
 
-A Process is the public programming model. Start it from a source stream, then write ordinary Python in its event handler.
+Use [native changelog collections](./changelog-collections) for top-N and keyed
+row normalization, without a workflow worker.
+
+A Process is the programming model for application logic. Start it from a source stream, then write ordinary Python in its event handler.
 
 ```python
 catalog = streaming.versioned("catalog", key="product_id")

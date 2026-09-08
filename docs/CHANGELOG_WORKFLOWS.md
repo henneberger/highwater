@@ -1,5 +1,10 @@
 # Changelog workflows: assessment and proposed operator model
 
+Implementation update: native normalization, counted/ordered top-N, indexed
+collection reads, and scoped mode validation are now available. See
+[the implemented contracts](COLLECTIONS.md). The review below records the original
+baseline and broader proposal; it is not a current feature checklist.
+
 Status: design review, 2026-09-08. The APIs below are proposals, not implemented
 features. Highwater baseline: `4d4a3c1`. Flink source inspected in `~/flink` at
 `4828c1869f815d2b9cef2e8617b47f5fad01edeb`. This is a survey of streaming

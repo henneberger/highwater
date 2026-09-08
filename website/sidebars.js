@@ -31,6 +31,7 @@ const sidebars = {
             'develop/python/batching',
             'develop/python/event-time',
             'develop/python/operators',
+            'develop/python/changelog-collections',
             'develop/python/maintained-results',
             'develop/python/upgrades',
           ],

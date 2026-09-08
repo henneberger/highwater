@@ -2,7 +2,7 @@
 
 Native operator output can be read as rows without interpreting its changelog.
 `client.view(operator_id)` refers to an existing native filter, window,
-deduplication, interval-join, or temporal-join operator. It does not create an
+deduplication, interval-join, temporal-join, normalization, or top-N operator. It does not create an
 operator or run Python code.
 
 ```python
@@ -57,3 +57,8 @@ the result. It supports at most 32 operators and 10,000 distinct output rows per
 operator. Capture cost grows with changelog history and holds the control-shard
 transaction while reading; use it for bounded results and occasional consistent
 reads. It is not an indexed query service or an incremental view optimizer.
+
+Native normalization and top-N maintain indexed outputs. Their single-view
+snapshots read those indexes and enforce a 10,000 indexed-row limit before
+consolidation. Use `client.collection_rows(id, group=[...])` for direct group
+reads without a saved snapshot; see [native collections](COLLECTIONS.md).

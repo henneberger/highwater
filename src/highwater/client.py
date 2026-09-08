@@ -18,6 +18,9 @@ from .errors import StreamBackpressure, WorkflowCancelled, WorkflowFailed
 from .model import (
     ChangeKind,
     FilterSpec,
+    NormalizeSpec,
+    TopNSpec,
+    CollectionMode,
     DeduplicateOutput,
     DeduplicateSpec,
     Event,
@@ -650,8 +653,12 @@ class Client:
 
     async def _deploy_operator(
         self,
-        spec: DeduplicateSpec | FilterSpec | IntervalJoinSpec | ProcessSpec | TemporalJoinSpec | WindowAggregateSpec,
+        spec: NormalizeSpec | TopNSpec | DeduplicateSpec | FilterSpec | IntervalJoinSpec | ProcessSpec | TemporalJoinSpec | WindowAggregateSpec,
     ) -> dict[str, Any]:
+        if isinstance(spec, (NormalizeSpec, TopNSpec)):
+            payload = asdict(spec)
+            payload["kind"] = "top_n" if isinstance(spec, TopNSpec) else "normalize"
+            return await self._request("POST", "/relational-operators", payload)
         if isinstance(spec, ProcessSpec):
             workflow_type = spec.workflow if isinstance(spec.workflow, str) else getattr(
                 spec.workflow,
@@ -923,6 +930,33 @@ class Client:
             initial_states=initial_states,
             initial_state_version=initial_state_version,
         )
+
+    async def top_n(
+        self, operator_id: str, *, input: str, order_by, n: int,
+        partition_by=(), primary_key=(), input_mode=CollectionMode.RETRACT,
+    ) -> dict[str, Any]:
+        """Maintain winner rows natively, retaining candidates for future retractions."""
+        return await self._deploy_operator(TopNSpec(
+            operator_id, input, order_by, n, partition_by, primary_key, input_mode,
+        ))
+
+    async def normalize(self, operator_id: str, *, input: str, primary_key, input_mode=CollectionMode.UPSERT) -> dict[str, Any]:
+        """Convert keyed upserts and key-only deletes to balanced full-row changes."""
+        return await self._deploy_operator(NormalizeSpec(operator_id, input, primary_key, input_mode))
+
+    async def relational_operator(self, operator_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/relational-operators/{quote(operator_id, safe='')}")
+
+    async def collection_rows(self, operator_id: str, *, key: str | None = None, group: tuple | list | None = None, limit: int = 10_000) -> list[dict[str, Any]]:
+        """Read indexed current rows. Raises instead of silently truncating at limit."""
+        if group is not None:
+            if key is not None or not isinstance(group, (tuple, list)):
+                raise ValueError("group must be a tuple/list and cannot be combined with key")
+            key = json.dumps(group, separators=(",", ":"), ensure_ascii=False)
+        path = f"/relational-operators/{quote(operator_id, safe='')}/rows?limit={limit}"
+        if key is not None:
+            path += f"&key={quote(key, safe='')}"
+        return await self._request("GET", path)
 
     async def stream_filter(self, operator_id: str) -> dict[str, Any]:
         return await self._request(

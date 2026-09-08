@@ -466,6 +466,24 @@ fn operator_summaries(app: &AppState) -> Result<Vec<Value>> {
             "workflow_type": operator.workflow_type,
         }));
     }
+    for (_, operator) in app.store.scan::<RelationalSpec>("relational/")? {
+        let edge = app
+            .store
+            .get::<OperatorEdge>(&operator_edge_key(&operator.operator_id))?;
+        let emitted = app
+            .store
+            .get::<u64>(&format!(
+                "meta/operator-change/{}",
+                encoded(&operator.operator_id)
+            ))?
+            .unwrap_or(0);
+        rows.push(json!({
+            "kind": operator.kind, "operator_id": operator.operator_id,
+            "status": "ACTIVE", "input": [operator.stream], "emitted": emitted,
+            "workflow_type": null, "output_stream": edge.map(|edge| edge.output_stream),
+            "input_mode": operator.input_mode, "n": operator.n,
+        }));
+    }
     Ok(rows)
 }
 

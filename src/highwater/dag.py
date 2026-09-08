@@ -9,6 +9,9 @@ from .model import (
     DeduplicateSpec,
     EventTimeGate,
     FilterSpec,
+    NormalizeSpec,
+    TopNSpec,
+    CollectionMode,
     IntervalJoinType,
     IntervalJoinSpec,
     ProcessOptions,
@@ -23,6 +26,8 @@ from .model import (
 OperatorSpec = (
     ProcessSpec
     | FilterSpec
+    | NormalizeSpec
+    | TopNSpec
     | WindowAggregateSpec
     | TemporalJoinSpec
     | IntervalJoinSpec
@@ -154,6 +159,18 @@ class Dag:
             ),
             output=output,
         )
+
+    def normalize(self, operator_id: str, *, input: str, primary_key, input_mode=CollectionMode.UPSERT, output: str | None = None) -> "Dag":
+        return self._operator(NormalizeSpec(operator_id, input, primary_key, input_mode), output=output)
+
+    def top_n(
+        self, operator_id: str, *, input: str, order_by, n: int,
+        partition_by=(), primary_key=(), input_mode=CollectionMode.RETRACT,
+        output: str | None = None,
+    ) -> "Dag":
+        return self._operator(TopNSpec(
+            operator_id, input, order_by, n, partition_by, primary_key, input_mode,
+        ), output=output)
 
     def filter(
         self,
@@ -334,6 +351,23 @@ class Dag:
                     f"output stream {output!r} requires source-managed watermarks"
                 )
 
+        retracting = {self._outputs[name] for name, spec in self._operators.items()
+                      if isinstance(spec, (NormalizeSpec, TopNSpec)) and name in self._outputs}
+        while True:
+            previous = set(retracting)
+            for name, spec in self._operators.items():
+                if name in self._outputs and any(stream in retracting for stream in self._input_streams(spec)):
+                    retracting.add(self._outputs[name])
+            if previous == retracting:
+                break
+        for spec in self._operators.values():
+            if isinstance(spec, (NormalizeSpec, TopNSpec)):
+                mode = spec.input_mode
+                if mode != CollectionMode.RETRACT and spec.stream in output_owners:
+                    raise ValueError("native changelog input requires retract mode")
+            if isinstance(spec, DeduplicateSpec) and spec.stream in retracting:
+                raise ValueError("retracting collection cannot feed append-only deduplicate")
+
         adjacency: dict[str, set[str]] = {}
         for operator_id, spec in self._operators.items():
             operator_node = f"operator:{operator_id}"
@@ -391,6 +425,8 @@ class Dag:
         names = {
             ProcessSpec: "process",
             FilterSpec: "filter",
+            NormalizeSpec: "normalize",
+            TopNSpec: "top-n",
             WindowAggregateSpec: "window aggregate",
             TemporalJoinSpec: "temporal join",
             IntervalJoinSpec: "interval join",
@@ -402,7 +438,7 @@ class Dag:
     def _input_streams(spec: OperatorSpec) -> tuple[str, ...]:
         if isinstance(spec, ProcessSpec):
             return (spec.input, *spec.versioned_streams)
-        if isinstance(spec, (FilterSpec, WindowAggregateSpec, DeduplicateSpec)):
+        if isinstance(spec, (FilterSpec, WindowAggregateSpec, DeduplicateSpec, NormalizeSpec, TopNSpec)):
             return (spec.stream,)
         if isinstance(spec, TemporalJoinSpec):
             return (spec.probe_stream, spec.version_stream)
@@ -422,6 +458,12 @@ class Dag:
 
     @staticmethod
     def _operator_details(spec: OperatorSpec) -> str:
+        if isinstance(spec, NormalizeSpec):
+            return f"input={spec.input_mode.value} primary_key={','.join(spec.primary_key)} output=retract frontier=sealed_input_only"
+        if isinstance(spec, TopNSpec):
+            return (f"n={spec.n} input={spec.input_mode.value} partition_by={','.join(spec.partition_by) or 'global'} "
+                    f"order_by={','.join(field + ':' + direction for field, direction in spec.order_by)} "
+                    "algorithm=retractable_ordered_multiset output=retract retention=all_live_rows frontier=sealed_input_only")
         workflow = f"workflow={_workflow_name(spec.workflow)}"
         if isinstance(spec, ProcessSpec):
             details = [workflow, f"state=v{spec.state_version}"]

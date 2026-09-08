@@ -613,6 +613,7 @@ pub(crate) async fn create_window_schedule(
                 "final window schedules require drop or side_output for data beyond allowed lateness"
             );
         }
+        reject_relational_id(transaction, &schedule.schedule_id)?;
         let key = stream_schedule_key(&schedule.schedule_id);
         if let Some(existing) = transaction.get::<WindowSchedule>(&key)? {
             if existing.has_same_spec(&schedule) {
@@ -696,6 +697,7 @@ pub(crate) async fn create_temporal_join(
         {
             bail!("temporal joins require drop or side_output late policies");
         }
+        reject_relational_id(transaction, &join.join_id)?;
         let storage_key = temporal_join_key(&join.join_id);
         if let Some(existing) = transaction.get::<TemporalJoin>(&storage_key)? {
             if existing.has_same_spec(&join) {
@@ -803,6 +805,7 @@ pub(crate) async fn create_interval_join(
         {
             bail!("interval joins require drop or side_output late policies");
         }
+        reject_relational_id(transaction, &join.join_id)?;
         let storage_key = interval_join_key(&join.join_id);
         if let Some(existing) = transaction.get::<IntervalJoin>(&storage_key)? {
             if existing.has_same_spec(&join) {
@@ -915,6 +918,7 @@ pub(crate) async fn create_deduplicate(
         if config.late_policy == LatePolicy::Accept {
             bail!("deduplicate operators require drop or side_output late policies");
         }
+        reject_relational_id(transaction, &operator.operator_id)?;
         let storage_key = deduplicate_key(&operator.operator_id);
         if let Some(existing) = transaction.get::<Deduplicate>(&storage_key)? {
             if existing.has_same_spec(&operator) {
@@ -925,6 +929,8 @@ pub(crate) async fn create_deduplicate(
                 operator.operator_id,
             );
         }
+        transaction.put(&storage_key, &operator)?;
+        validate_collection_edges(transaction)?;
         created = true;
         let records: Vec<StreamRecord> = transaction
             .scan::<StreamRecord>(&stream_record_prefix(&operator.stream))?
@@ -935,6 +941,7 @@ pub(crate) async fn create_deduplicate(
             index_deduplicate_record(transaction, &mut operator, record)?;
         }
         transaction.put(storage_key, &operator)?;
+        validate_collection_edges(transaction)?;
         refresh_deduplicates(transaction, None)
     })?;
     let operator = app
@@ -1012,6 +1019,7 @@ pub(crate) async fn create_stream_filter(
         {
             bail!("filter stream not found: {}", filter.stream);
         }
+        reject_relational_id(transaction, &filter.operator_id)?;
         let storage_key = stream_filter_key(&filter.operator_id);
         if let Some(existing) = transaction.get::<StreamFilter>(&storage_key)? {
             if existing.has_same_spec(&filter) {
@@ -1036,7 +1044,8 @@ pub(crate) async fn create_stream_filter(
                 filter.records_emitted += 1;
             }
         }
-        transaction.put(storage_key, &filter)
+        transaction.put(storage_key, &filter)?;
+        validate_collection_edges(transaction)
     })?;
     let filter = app
         .store
@@ -1164,6 +1173,7 @@ pub(crate) async fn create_operator_edge(
             )?;
         }
         transaction.put(key, &edge)?;
+        validate_collection_edges(transaction)?;
         created = true;
         Ok(())
     })?;

@@ -21,6 +21,7 @@ from .model import (
     ActivityOptions,
     ChangeKind,
     Comparison,
+    CollectionMode,
     DeduplicateOutput,
     ChildWorkflowOptions,
     Event,
@@ -49,6 +50,7 @@ from .registry import Registry
 from .runtime import continue_as_new, execute_activity, execute_child_workflow, get_version, info, now, sleep, wait_condition, wait_for_watermark
 
 __all__ = [
+    "CollectionMode",
     "MaterializedView", "ViewRow", "ViewSnapshot",
     "ActivityError", "ActivityOptions", "AutoscalingPolicy", "ChangeKind", "ChildWorkflowError", "ChildWorkflowOptions", "Client", "Comparison", "DeduplicateOutput", "Event", "EventTimeGate", "IntervalJoinOutput", "IntervalJoinType", "NonDeterminismError", "NonRetryableError", "ProcessContext", "ProcessHandle", "ProcessOptions", "QueryNotFound", "RecordValue", "Registry", "ReplayManifest", "ReplayComparison", "ReplayDifference", "ScalingDecision", "Transition", "Versioned", "WorkloadSample",
     "LatePolicy", "RemoteClient", "RemoteWorkflowHandle", "RetryPolicy", "StreamBackpressure", "StreamInfo", "StreamOptions", "StreamRecord", "StreamWriter", "HighwaterError", "TemporalJoinOutput", "TemporalJoinType", "UpdateNotFound", "WatermarkMode", "WindowAggregation",
